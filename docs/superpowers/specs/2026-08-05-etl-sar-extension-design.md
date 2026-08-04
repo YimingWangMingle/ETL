@@ -87,11 +87,11 @@ P_{SAR}=W_{SAR}W_{SAR}^{\dagger}
 
 ### 4.5 RepresentationTrainer
 
-使用 PyTorch 离线训练 ETL GMVAE，再训练零初始化的 SAR 低秩辅助头。保存编码器、ETL 解码器、混合先验参数、SAR 头、动作归一化统计量和训练配置。
+使用 PyTorch 训练 ETL GMVAE 和零初始化的 SAR 低秩辅助头。按照 ETL Algorithm 1，GMVAE 在探索阶段使用不断增长的 action buffer 交替更新；训练器同时支持从已落盘 buffer 恢复。保存编码器、ETL 解码器、混合先验参数、SAR 头、动作归一化统计量和训练配置。
 
 ### 4.6 TransferTrainer
 
-使用自定义 SB3 PPO policy。策略从 observation 产生潜变量 `z`，再通过 ETL 解码器和 SAR 辅助头得到完整动作分布的均值。PPO rollout buffer 保存策略采样动作及其 log-probability；环境适配器另行记录投影到合法动作域后的实际执行动作。解码器位于 policy 均值计算图内并可按阶段微调。
+使用标准 SB3 PPO 在 ETL 潜在动作空间中训练。策略从 observation 采样潜变量 `z`；`LatentActionWrapper` 将 `z` 经 ETL 解码器和 SAR 辅助头映射为环境完整动作。PPO rollout buffer 保存潜在动作及其 log-probability，交互缓冲另行保存 `(z_t, a_t)`。PPO 更新潜在策略；decoder 按 ETL Eq. 10 使用交互对进行独立监督微调。
 
 ### 4.7 EvaluationRunner
 
@@ -191,37 +191,40 @@ P_{SAR}(a-D_\theta^{ETL}(z))-\Delta a_{SAR}
 
 ### 6.3 复杂任务 PPO
 
-PPO policy 的完整动作均值由 ETL 解码器和 SAR 修正共同产生：
+PPO policy 在潜在动作空间产生分布；采样的潜变量再被确定性地解码为完整环境动作：
 
 \[
-o\rightarrow\pi_\omega\rightarrow z
-\rightarrow\mu_a
-\rightarrow\mathcal N(\mu_a,\sigma_a)
-\rightarrow a
+o\rightarrow(\mu_z,\sigma_z)
+\rightarrow z\sim\mathcal N(\mu_z,\sigma_z)
+\rightarrow a=\Pi_{\mathcal A}
+\left(D_\theta^{ETL}(z)+\Delta a_{SAR}\right)
 \]
 
-基础目标为标准 PPO clipped objective、value loss 和 entropy bonus。解冻解码器后加入预训练参数锚定：
+潜在策略使用标准 PPO clipped objective、value loss 和 entropy bonus。其梯度不直接更新 decoder。按照 ETL Eq. 10，交互缓冲中的 `(z_t,a_t)` 用于独立的监督微调：
 
 \[
-\mathcal L_{anchor}=\|\theta-\theta_0\|_2^2
+\mathcal L_{Dec}=\mathbb E_{(z_t,a_t)\sim D_{task}}
+\left[\|Dec_\theta(z_t)-a_t\|_2^2\right]
 \]
 
+为限制短实验中的灾难性漂移，decoder 目标增加预训练参数锚定：
+
 \[
-\mathcal L_{transfer}=\mathcal L_{PPO}
-+\eta\mathcal L_{anchor}
+\mathcal L_{DecFT}=\mathcal L_{Dec}
++\eta\|\theta-\theta_0\|_2^2
 +\gamma\mathcal L_{budget}
 \]
 
-`W_SAR` 不进入优化器。ETL 解码器、SAR 头和其余 policy 参数使用独立 optimizer parameter groups。
+`W_SAR` 不进入任何优化器。潜在 PPO、ETL decoder 和 SAR 头使用互相独立的优化器；PPO 与 decoder 更新不可合并成一个反向传播步骤。
 
 ## 7. 训练顺序
 
-1. 探索简单任务并构建两种数据视图。
-2. 训练纯 ETL GMVAE，保存不可变的基础 checkpoint。
+1. 探索简单任务并构建两种数据视图，同时按 ETL Algorithm 1 用增长中的 action buffer 交替更新 GMVAE。
+2. 完成纯 ETL GMVAE 预训练，保存不可变的基础 checkpoint。
 3. 从成功轨迹拟合 PCA+ICA，保存固定 `W_SAR`。
 4. 零初始化 SAR 辅助头，训练受预算约束的低秩修正。
-5. 复杂任务 PPO 初期冻结 ETL 解码器。
-6. 按配置解冻解码器并降低其学习率。
+5. 复杂任务 PPO 始终只在潜在动作空间更新策略；初期冻结 ETL 解码器。
+6. 按配置解冻解码器，用交互缓冲中的 `(z_t,a_t)` 和较小学习率执行 ETL Eq. 10 监督微调。
 7. 定期确定性评估，分别保存 best 和 latest checkpoint。
 
 ## 8. 实验与评价
@@ -261,7 +264,7 @@ o\rightarrow\pi_\omega\rightarrow z
 - `lambda=0` 时 SAR 分支对动作严格无影响。
 - SAR 修正满足硬贡献预算。
 - GMVAE 编码/解码和混合先验 loss 可反向传播。
-- policy sampled action、log-probability 和 rollout buffer 一致；executed action 单独记录且满足环境边界。
+- PPO latent action、log-probability 和 rollout buffer 一致；decoded/executed full action 单独记录且满足环境边界。
 - 冻结/解冻和 optimizer parameter groups 正确。
 - checkpoint round-trip 输出一致。
 - Hand/Leg 数据与 checkpoint 不可交叉加载。
