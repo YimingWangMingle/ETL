@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "etl-lattice-sar"
+version = "0.1.0"
+description = "ETL-dominant action representation with SAR transfer and SB3 trainers"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "gymnasium>=0.29,<1.1",
+  "numpy>=1.26,<3",
+  "pyyaml>=6,<7",
+  "scikit-learn>=1.4,<2",
+  "stable-baselines3>=2.3,<3",
+  "tensorboard>=2.16,<3",
+  "torch>=2.2,<3",
+  "typer>=0.12,<1",
+]
+
+[project.optional-dependencies]
+myosuite = ["myosuite>=2.12,<2.13"]
+test = ["pytest>=8,<9"]
+
+[project.scripts]
+etl-sar = "etl_sar.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["myo: requires MyoSuite and MuJoCo task assets"]
+filterwarnings = [
+  "ignore:Setting the shape on a NumPy array has been deprecated.*:DeprecationWarning:joblib.numpy_pickle",
+]
