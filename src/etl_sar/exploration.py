@@ -136,7 +136,7 @@ class _ExploreCallback(BaseCallback):
                 "reward": info["etl/extrinsic_reward"],
                 "next_observation": info["etl/next_observation"],
                 "behavior": info["etl/behavior"],
-                "success": bool(info.get("success", False)),
+                "success": bool(info.get("success", info.get("solved", False))),
                 "done": bool(done),
                 "truncated": bool(info.get("TimeLimit.truncated", False)),
             }

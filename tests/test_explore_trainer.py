@@ -34,6 +34,16 @@ class TinySourceEnv(gym.Env[np.ndarray, np.ndarray]):
         return observation, reward, terminated, False, {"success": terminated}
 
 
+class TinySolvedSourceEnv(TinySourceEnv):
+    def reset(self, *, seed=None, options=None):
+        observation, _ = super().reset(seed=seed, options=options)
+        return observation, {"solved": False}
+
+    def step(self, action):
+        observation, reward, terminated, truncated, _ = super().step(action)
+        return observation, reward, terminated, truncated, {"solved": terminated}
+
+
 def make_representation() -> RepresentationTrainer:
     gmvae = GMVAE(action_dim=6, latent_dim=20, components=20, hidden_dims=(16,))
     action_model = ETLSARActionModel(
@@ -95,3 +105,30 @@ def test_explore_trainer_collects_actions_and_interleaves_gmvae(tmp_path) -> Non
     assert store.success_pool().shape[0] > 0
     assert trainer.gmvae_update_steps
     assert trainer.bdr_update_steps
+
+
+def test_explore_trainer_accepts_myosuite_solved_flag(tmp_path) -> None:
+    store = TrajectoryStore(
+        tmp_path / "data",
+        limb=Limb.HAND,
+        source_task="reorient8",
+        action_dim=6,
+    )
+    trainer = ExploreTrainer(
+        env_factory=TinySolvedSourceEnv,
+        state_encoder=StateEncoder(4, 20, hidden_dims=(16,)),
+        representation=make_representation(),
+        trajectory_store=store,
+        limb=Limb.HAND,
+        source_task="reorient8",
+        run_dir=tmp_path / "run",
+        total_timesteps=16,
+        n_steps=16,
+        batch_size=8,
+        representation_update_interval=12,
+        seed=3,
+    )
+
+    trainer.run()
+
+    assert store.success_pool().shape[0] > 0
