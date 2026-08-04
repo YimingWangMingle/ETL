@@ -75,7 +75,7 @@ Hand 和 Leg 的数据目录、归一化统计量和元数据必须物理隔离�
 
 ### 4.4 SynergyExtractor
 
-对 SAR success pool 的肌肉激活进行训练集拟合的标准化，然后依次执行 PCA 和 FastICA。组件数依据简单任务验证集确定。输出包括 `W_SAR`、标准化统计量、解释方差、组件数、肢体类型、源任务和数据指纹。
+对 SAR success pool 的肌肉激活进行训练集拟合的标准化，然后依次执行 PCA 和 FastICA，并将协同控制输出归一化到 `[-1,1]`。依据 SAR 论文，Hand 和 Leg 默认都使用 20 个 ICAPCA synergies（论文报告均覆盖超过 80% 方差）；组件数只允许在显式消融配置中改变。输出包括 `W_SAR`、PCA/ICA 参数、标准化统计量、解释方差、组件数、肢体类型、源任务和数据指纹。
 
 投影矩阵使用：
 
@@ -87,7 +87,7 @@ P_{SAR}=W_{SAR}W_{SAR}^{\dagger}
 
 ### 4.5 RepresentationTrainer
 
-使用 PyTorch 训练 ETL GMVAE 和零初始化的 SAR 低秩辅助头。按照 ETL Algorithm 1，GMVAE 在探索阶段使用不断增长的 action buffer 交替更新；训练器同时支持从已落盘 buffer 恢复。保存编码器、ETL 解码器、混合先验参数、SAR 头、动作归一化统计量和训练配置。
+使用 PyTorch 训练 ETL GMVAE 和零初始化的 SAR 低秩辅助头。GMVAE 潜在维度和 mixture component 数默认都与 20 个 synergy patterns 对齐。按照 ETL Algorithm 1，GMVAE 在探索阶段使用不断增长的 action buffer 交替更新；训练器同时支持从已落盘 buffer 恢复。保存编码器、ETL 解码器、混合先验参数、SAR 头、动作归一化统计量和训练配置。
 
 ### 4.6 TransferTrainer
 
