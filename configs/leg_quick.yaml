@@ -6,7 +6,7 @@ source:
   role: source
   limb: leg
 target:
-  env_id: myoLegUneven-v0
+  env_id: myoLegRoughTerrainWalk-v0
   role: target
   limb: leg
 representation:
