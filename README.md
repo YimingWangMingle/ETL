@@ -31,13 +31,39 @@ etl-sar transfer --config configs/hand_quick.yaml --bundle runs/hand_representat
 etl-sar evaluate --config configs/hand_quick.yaml --bundle runs/hand_representation/representation_bundle.pt --model-path runs/hand_target/best_model.zip --output-dir runs/hand_eval --episodes 20 --environment-steps 100000
 ```
 
-Leg 使用 `configs/leg_quick.yaml`。其中 `myoLegUneven-v0` 必须由 SAR terrain environment 注册；如果当前 MyoSuite 发行版未提供该 ID，程序会明确报错，不会用 `myoLegWalk-v0` 替代。
+Leg 使用 `configs/leg_quick.yaml`，泛化链为 `myoLegWalk-v0 -> myoLegRoughTerrainWalk-v0`。
 
 同预算对比：
 
 ```powershell
 etl-sar compare --baseline runs/baseline_eval/summary.json --extension runs/hand_eval/summary.json --output runs/comparison.json
 ```
+
+## 最小 Hand + Leg 泛化试验
+
+先查看两域所有阶段和参数，不启动训练或创建运行目录：
+
+```powershell
+.\scripts\run_minimal_pilot.ps1 -WhatIf
+```
+
+确认后运行最小试验：
+
+```powershell
+.\scripts\run_minimal_pilot.ps1
+```
+
+如果 `etl-sar` 不在 `PATH` 中，可显式指定虚拟环境入口：
+
+```powershell
+.\scripts\run_minimal_pilot.ps1 -EtlSar .\.venv\Scripts\etl-sar.exe
+```
+
+输出写入 `runs/minimal_pilot`。每个阶段使用包含配置 SHA-256、预算、种子和命令的 `stage.complete.json`；只有签名匹配且预期产物仍存在时才会跳过，因此失败后可直接重新执行同一命令。
+
+本试验对 Hand 和 Leg 分别复用同一个源数据与 representation bundle。基线使用 `--sar-scale 0.0`，extension 使用 `--sar-scale 1.0`；两者都训练 20,000 个目标环境步，并以相同种子确定性评估 10 回合。只有两个域都满足平均回报提升且成功率不下降，`pilot_summary.json` 的 `pilot_positive` 才为 `true`。该结果只用于最小工作量的初步判断，不代表完整收敛或统计显著性结论。
+
+旧 ETL-Ray 结果只能通过 `-LegacyReference <json>` 作为外部参考传入。环境 ID、MyoSuite 协议和指标不完全一致时，摘要会标记 `comparable=false`，不会计算跨协议差值。
 
 ## 测试
 
