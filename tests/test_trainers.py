@@ -134,3 +134,42 @@ def test_checkpoint_metadata_rejects_wrong_limb(tmp_path) -> None:
                 data_fingerprint="xyz",
             ),
         )
+
+
+def test_transfer_trainer_accepts_custom_evaluation_frequency(tmp_path) -> None:
+    action_model, representation = make_components()
+
+    trainer = TransferTrainer(
+        env_factory=TinyMuscleEnv,
+        action_model=action_model,
+        representation=representation,
+        run_dir=tmp_path,
+        total_timesteps=64,
+        decoder_freeze_steps=32,
+        n_steps=16,
+        batch_size=8,
+        eval_freq=37,
+        seed=6,
+    )
+
+    assert trainer.eval_freq == 37
+
+
+def test_transfer_trainer_rejects_nonpositive_evaluation_frequency(
+    tmp_path,
+) -> None:
+    action_model, representation = make_components()
+
+    with pytest.raises(ValueError, match="eval_freq must be positive"):
+        TransferTrainer(
+            env_factory=TinyMuscleEnv,
+            action_model=action_model,
+            representation=representation,
+            run_dir=tmp_path,
+            total_timesteps=64,
+            decoder_freeze_steps=32,
+            n_steps=16,
+            batch_size=8,
+            eval_freq=0,
+            seed=6,
+        )

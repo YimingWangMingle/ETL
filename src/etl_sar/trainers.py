@@ -155,6 +155,7 @@ class TransferTrainer:
         n_steps: int = 256,
         batch_size: int = 64,
         learning_rate: float = 3e-4,
+        eval_freq: int | None = None,
         seed: int = 0,
     ) -> None:
         self.env_factory = env_factory
@@ -166,6 +167,9 @@ class TransferTrainer:
         self.n_steps = n_steps
         self.batch_size = batch_size
         self.learning_rate = learning_rate
+        self.eval_freq = self.n_steps if eval_freq is None else int(eval_freq)
+        if self.eval_freq < 1:
+            raise ValueError("eval_freq must be positive")
         self.seed = seed
         self.decoder_update_steps: list[int] = []
         self.model: PPO | None = None
@@ -181,7 +185,7 @@ class TransferTrainer:
             eval_env,
             best_model_save_path=str(self.run_dir),
             log_path=str(self.run_dir),
-            eval_freq=max(self.n_steps, 1),
+            eval_freq=self.eval_freq,
             n_eval_episodes=1,
             deterministic=True,
             verbose=0,

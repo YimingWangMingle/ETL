@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from typer.testing import CliRunner
 
-from etl_sar.cli import app
+from etl_sar.cli import _resolve_sar_scale, app
 
 
 def write_config(path: Path) -> Path:
@@ -73,3 +75,16 @@ def test_explore_rejects_minimum_over_maximum_budget(tmp_path) -> None:
 
     assert result.exit_code != 0
     assert "cannot exceed" in result.output
+
+
+def test_runtime_sar_scale_overrides_bundle_value() -> None:
+    assert _resolve_sar_scale(1.0, 0.0) == 0.0
+    assert _resolve_sar_scale(1.0, None) == 1.0
+
+
+def test_runtime_sar_scale_rejects_out_of_range() -> None:
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        _resolve_sar_scale(1.0, 1.1)
+
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        _resolve_sar_scale(1.0, -0.1)

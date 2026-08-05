@@ -20,6 +20,9 @@ class EvaluationSummary:
     mean_return: float
     return_std: float
     success_rate: float
+    environment_id: str | None = None
+    evaluation_seed: int | None = None
+    sar_scale: float | None = None
 
     @classmethod
     def load(cls, path: str | Path) -> "EvaluationSummary":
@@ -37,6 +40,8 @@ def evaluate_checkpoint(
     output_dir: str | Path,
     environment_steps: int,
     seed: int = 10_000,
+    environment_id: str | None = None,
+    sar_scale: float | None = None,
 ) -> EvaluationSummary:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -88,6 +93,9 @@ def evaluate_checkpoint(
         mean_return=float(np.mean(returns)),
         return_std=float(np.std(returns)),
         success_rate=float(np.mean(successes)),
+        environment_id=environment_id,
+        evaluation_seed=seed,
+        sar_scale=sar_scale,
     )
     summary.save(output / "summary.json")
     return summary
@@ -96,11 +104,30 @@ def evaluate_checkpoint(
 def compare_runs(
     baseline: EvaluationSummary,
     extension: EvaluationSummary,
-) -> dict[str, float | int]:
+) -> dict[str, float | int | str | None]:
+    if baseline.episodes != extension.episodes:
+        raise ValueError("comparison requires equal episode counts")
     if baseline.environment_steps != extension.environment_steps:
         raise ValueError("comparison requires equal environment-step budgets")
+    if (
+        baseline.environment_id is not None
+        and extension.environment_id is not None
+        and baseline.environment_id != extension.environment_id
+    ):
+        raise ValueError("comparison requires equal environment IDs")
+    if (
+        baseline.evaluation_seed is not None
+        and extension.evaluation_seed is not None
+        and baseline.evaluation_seed != extension.evaluation_seed
+    ):
+        raise ValueError("comparison requires equal evaluation seeds")
     return {
+        "episodes": baseline.episodes,
         "environment_steps": baseline.environment_steps,
+        "environment_id": baseline.environment_id or extension.environment_id,
+        "evaluation_seed": baseline.evaluation_seed or extension.evaluation_seed,
+        "baseline_sar_scale": baseline.sar_scale,
+        "extension_sar_scale": extension.sar_scale,
         "baseline_success_rate": baseline.success_rate,
         "extension_success_rate": extension.success_rate,
         "success_rate_delta": extension.success_rate - baseline.success_rate,

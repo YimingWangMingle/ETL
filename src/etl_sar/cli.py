@@ -27,6 +27,13 @@ from etl_sar.types import Limb
 app = typer.Typer(no_args_is_help=True, help="ETL core with SAR transfer and SB3 engineering")
 
 
+def _resolve_sar_scale(bundle_scale: float, override: float | None) -> float:
+    scale = float(bundle_scale if override is None else override)
+    if not 0.0 <= scale <= 1.0:
+        raise ValueError("SAR scale must be between 0 and 1")
+    return scale
+
+
 def _require_myosuite() -> None:
     try:
         import myosuite  # noqa: F401
@@ -48,6 +55,7 @@ def _load_bundle(
     config: ExperimentConfig,
     bundle_path: Path,
     env: gym.Env,
+    sar_scale: float | None = None,
 ) -> tuple[ETLSARActionModel, RepresentationTrainer]:
     bundle = torch.load(bundle_path, map_location="cpu", weights_only=False)
     if bundle["limb"] != config.limb.value:
@@ -74,7 +82,7 @@ def _load_bundle(
         action_low=torch.as_tensor(contract.action_low),
         action_high=torch.as_tensor(contract.action_high),
         rho=float(bundle["rho"]),
-        enabled_scale=float(bundle["enabled_scale"]),
+        enabled_scale=_resolve_sar_scale(bundle["enabled_scale"], sar_scale),
     )
     action_model.load_state_dict(bundle["action_model"])
     representation = RepresentationTrainer(
@@ -251,10 +259,14 @@ def transfer(
     run_dir: Path = typer.Option(..., file_okay=False),
     timesteps: int = typer.Option(100_000, min=32),
     decoder_freeze_steps: int = typer.Option(10_000, min=0),
+    sar_scale: float | None = typer.Option(None),
+    eval_freq: int | None = typer.Option(None, min=1),
 ) -> None:
     cfg = ExperimentConfig.from_yaml(config)
     probe = _make_env(cfg.target.env_id)
-    action_model, representation = _load_bundle(cfg, bundle, probe)
+    action_model, representation = _load_bundle(
+        cfg, bundle, probe, sar_scale=sar_scale
+    )
     probe.close()
     trainer = TransferTrainer(
         env_factory=lambda: _make_env(cfg.target.env_id),
@@ -263,6 +275,7 @@ def transfer(
         run_dir=run_dir,
         total_timesteps=timesteps,
         decoder_freeze_steps=decoder_freeze_steps,
+        eval_freq=eval_freq,
         seed=cfg.seed,
     )
     typer.echo(str(trainer.run().best_checkpoint))
@@ -276,10 +289,13 @@ def evaluate(
     output_dir: Path = typer.Option(..., file_okay=False),
     episodes: int = typer.Option(20, min=1),
     environment_steps: int = typer.Option(..., min=1),
+    sar_scale: float | None = typer.Option(None),
 ) -> None:
     cfg = ExperimentConfig.from_yaml(config)
     base_env = _make_env(cfg.target.env_id)
-    action_model, _ = _load_bundle(cfg, bundle, base_env)
+    action_model, _ = _load_bundle(
+        cfg, bundle, base_env, sar_scale=sar_scale
+    )
     env = LatentActionWrapper(base_env, action_model)
     model = PPO.load(model_path)
     summary = evaluate_checkpoint(
@@ -289,6 +305,8 @@ def evaluate(
         output_dir=output_dir,
         environment_steps=environment_steps,
         seed=cfg.seed + 10_000,
+        environment_id=cfg.target.env_id,
+        sar_scale=action_model.enabled_scale,
     )
     typer.echo(json.dumps(summary.__dict__, indent=2))
 
