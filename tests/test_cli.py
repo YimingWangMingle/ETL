@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -50,7 +51,8 @@ def test_help_lists_complete_pipeline_commands() -> None:
 
     assert result.exit_code == 0
     for command in (
-        "explore", "fit-representation", "transfer", "evaluate", "compare"
+        "explore", "fit-representation", "transfer", "evaluate", "compare",
+        "pilot-summary",
     ):
         assert command in result.stdout
 
@@ -88,3 +90,40 @@ def test_runtime_sar_scale_rejects_out_of_range() -> None:
 
     with pytest.raises(ValueError, match="between 0 and 1"):
         _resolve_sar_scale(1.0, -0.1)
+
+
+def test_pilot_summary_command_writes_both_domain_decision(tmp_path) -> None:
+    comparisons = {
+        "hand": {
+            "episodes": 10,
+            "environment_steps": 20_000,
+            "environment_id": "myoHandReorient100-v0",
+            "mean_return_delta": 1.0,
+            "success_rate_delta": 0.0,
+        },
+        "leg": {
+            "episodes": 10,
+            "environment_steps": 20_000,
+            "environment_id": "myoLegRoughTerrainWalk-v0",
+            "mean_return_delta": 1.0,
+            "success_rate_delta": 0.0,
+        },
+    }
+    paths = {}
+    for domain, comparison in comparisons.items():
+        paths[domain] = tmp_path / f"{domain}.json"
+        paths[domain].write_text(json.dumps(comparison), encoding="utf-8")
+    output = tmp_path / "pilot.json"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "pilot-summary",
+            "--hand", str(paths["hand"]),
+            "--leg", str(paths["leg"]),
+            "--output", str(output),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(output.read_text(encoding="utf-8"))["pilot_positive"] is True

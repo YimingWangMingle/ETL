@@ -18,6 +18,7 @@ from etl_sar.envs import LatentActionWrapper, validate_environment
 from etl_sar.evaluation import EvaluationSummary, compare_runs, evaluate_checkpoint
 from etl_sar.exploration import ExploreTrainer, InsufficientSourceSuccessError
 from etl_sar.gmvae import GMVAE
+from etl_sar.pilot import build_pilot_summary
 from etl_sar.representation import RepresentationTrainer
 from etl_sar.synergy import SynergyArtifact
 from etl_sar.trainers import TransferTrainer
@@ -321,6 +322,30 @@ def compare(
         EvaluationSummary.load(baseline),
         EvaluationSummary.load(extension),
     )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    typer.echo(json.dumps(result, indent=2))
+
+
+@app.command("pilot-summary")
+def pilot_summary(
+    hand: Path = typer.Option(..., exists=True, dir_okay=False),
+    leg: Path = typer.Option(..., exists=True, dir_okay=False),
+    output: Path = typer.Option(..., dir_okay=False),
+    legacy_reference: Path | None = typer.Option(
+        None,
+        exists=True,
+        dir_okay=False,
+    ),
+) -> None:
+    hand_comparison = json.loads(hand.read_text(encoding="utf-8"))
+    leg_comparison = json.loads(leg.read_text(encoding="utf-8"))
+    legacy = (
+        json.loads(legacy_reference.read_text(encoding="utf-8"))
+        if legacy_reference is not None
+        else None
+    )
+    result = build_pilot_summary(hand_comparison, leg_comparison, legacy)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2), encoding="utf-8")
     typer.echo(json.dumps(result, indent=2))
