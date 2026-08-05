@@ -16,6 +16,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 
 from etl_sar.bdr import StateEncoder, behavior_metric_loss, directional_bonus, sample_unit_directions
 from etl_sar.data import TrajectoryEpisode, TrajectoryStore
+from etl_sar.protocols import task_succeeded
 from etl_sar.representation import RepresentationTrainer
 from etl_sar.types import Limb
 
@@ -136,7 +137,7 @@ class _ExploreCallback(BaseCallback):
                 "reward": info["etl/extrinsic_reward"],
                 "next_observation": info["etl/next_observation"],
                 "behavior": info["etl/behavior"],
-                "success": bool(info.get("success", info.get("solved", False))),
+                "success": task_succeeded(info),
                 "done": bool(done),
                 "truncated": bool(info.get("TimeLimit.truncated", False)),
             }

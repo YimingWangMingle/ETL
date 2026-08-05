@@ -10,6 +10,8 @@ import gymnasium as gym
 import numpy as np
 import torch
 
+from etl_sar.protocols import task_succeeded
+
 
 @dataclass(frozen=True)
 class EvaluationSummary:
@@ -59,7 +61,7 @@ def evaluate_checkpoint(
                 observation, reward, terminated, truncated, info = env.step(action)
                 episode_return += float(reward)
                 episode_steps += 1
-                success = success or bool(info.get("success", False))
+                success = success or task_succeeded(info)
             returns.append(episode_return)
             successes.append(success)
             rows.append(

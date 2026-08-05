@@ -29,6 +29,12 @@ class EvalEnv(gym.Env[np.ndarray, np.ndarray]):
         return np.zeros(3, dtype=np.float32), 1.0, done, False, {"success": done}
 
 
+class SolvedEvalEnv(EvalEnv):
+    def step(self, action):
+        observation, reward, terminated, truncated, _ = super().step(action)
+        return observation, reward, terminated, truncated, {"solved": terminated}
+
+
 class Predictor:
     def __init__(self) -> None:
         self.policy = nn.Linear(3, 2)
@@ -59,6 +65,18 @@ def test_evaluation_never_changes_parameters_and_writes_outputs(tmp_path) -> Non
         torch.equal(before[name], value)
         for name, value in model.policy.state_dict().items()
     )
+
+
+def test_evaluation_accepts_myosuite_solved_flag(tmp_path) -> None:
+    summary = evaluate_checkpoint(
+        Predictor(),
+        SolvedEvalEnv(),
+        episodes=2,
+        output_dir=tmp_path,
+        environment_steps=64,
+    )
+
+    assert summary.success_rate == pytest.approx(1.0)
 
 
 def test_compare_runs_reports_equal_budget_delta() -> None:
