@@ -15,7 +15,13 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 from etl_sar.action_model import ETLSARActionModel
+from etl_sar.checkpoints import (
+    load_checkpoint_pair,
+    save_checkpoint_pair,
+    write_transition_count,
+)
 from etl_sar.envs import LatentActionWrapper
+from etl_sar.formal.evaluate import evaluate_formal
 from etl_sar.representation import RepresentationTrainer
 from etl_sar.types import Limb
 
@@ -94,6 +100,17 @@ class FiniteTrainingCallback(BaseCallback):
         return True
 
 
+class ExactTransitionCallback(BaseCallback):
+    def __init__(self, *, target: int) -> None:
+        super().__init__(verbose=0)
+        if target <= 0:
+            raise ValueError("target transition count must be positive")
+        self.target = int(target)
+
+    def _on_step(self) -> bool:
+        return self.num_timesteps < self.target
+
+
 class DecoderFineTuneCallback(BaseCallback):
     def __init__(
         self,
@@ -135,10 +152,73 @@ class DecoderFineTuneCallback(BaseCallback):
         return True
 
 
+class PairedEvalCallback(EvalCallback):
+    def __init__(
+        self,
+        eval_env: Any,
+        *,
+        action_model: ETLSARActionModel,
+        pair_directory: Path,
+        formal_domain: str | None = None,
+        formal_env_factory: Callable[[], gym.Env] | None = None,
+        formal_seeds: tuple[int, ...] = (),
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(eval_env, **kwargs)
+        self.action_model = action_model
+        self.pair_directory = pair_directory
+        self.formal_domain = formal_domain
+        self.formal_env_factory = formal_env_factory
+        self.formal_seeds = formal_seeds
+
+    def _on_step(self) -> bool:
+        previous_best = self.best_mean_reward
+        evaluated = self.eval_freq > 0 and self.n_calls % self.eval_freq == 0
+        should_continue = super()._on_step()
+        if evaluated:
+            if self.model is None:
+                raise RuntimeError("paired evaluation callback has no policy")
+            save_checkpoint_pair(
+                policy=self.model,
+                action_model=self.action_model,
+                directory=self.pair_directory,
+                name=f"checkpoint_{self.num_timesteps}",
+                transitions=self.num_timesteps,
+            )
+            if self.formal_domain is not None:
+                if self.formal_env_factory is None or not self.formal_seeds:
+                    raise RuntimeError("formal evaluation callback is incomplete")
+                evaluate_formal(
+                    self.model,
+                    LatentActionWrapper(self.formal_env_factory(), self.action_model),
+                    domain=self.formal_domain,
+                    seeds=self.formal_seeds,
+                    output_dir=(
+                        self.pair_directory
+                        / "evaluation"
+                        / f"checkpoint_{self.num_timesteps}"
+                    ),
+                    environment_steps=self.num_timesteps,
+                )
+        if self.best_mean_reward > previous_best:
+            if self.model is None:
+                raise RuntimeError("paired evaluation callback has no policy")
+            save_checkpoint_pair(
+                policy=self.model,
+                action_model=self.action_model,
+                directory=self.pair_directory,
+                name="best",
+                transitions=self.num_timesteps,
+            )
+        return should_continue
+
+
 @dataclass(frozen=True)
 class TrainingArtifacts:
     latest_checkpoint: Path
     best_checkpoint: Path
+    latest_manifest: Path
+    best_manifest: Path
     evaluation_log: Path
 
 
@@ -156,6 +236,10 @@ class TransferTrainer:
         batch_size: int = 64,
         learning_rate: float = 3e-4,
         eval_freq: int | None = None,
+        evaluation_episodes: int = 1,
+        evaluation_seed: int = 10_000,
+        resume_manifest: str | Path | None = None,
+        formal_domain: str | None = None,
         seed: int = 0,
     ) -> None:
         self.env_factory = env_factory
@@ -170,6 +254,14 @@ class TransferTrainer:
         self.eval_freq = self.n_steps if eval_freq is None else int(eval_freq)
         if self.eval_freq < 1:
             raise ValueError("eval_freq must be positive")
+        if evaluation_episodes < 1:
+            raise ValueError("evaluation_episodes must be positive")
+        self.evaluation_episodes = int(evaluation_episodes)
+        self.evaluation_seed = int(evaluation_seed)
+        self.resume_manifest = Path(resume_manifest) if resume_manifest else None
+        if formal_domain not in {None, "hand", "leg"}:
+            raise ValueError("formal_domain must be hand or leg")
+        self.formal_domain = formal_domain
         self.seed = seed
         self.decoder_update_steps: list[int] = []
         self.model: PPO | None = None
@@ -181,9 +273,20 @@ class TransferTrainer:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         train_env = DummyVecEnv([self._make_wrapped_env])
         eval_env = DummyVecEnv([self._make_wrapped_env])
-        eval_callback = EvalCallback(
+        eval_env.seed(self.evaluation_seed)
+        eval_callback = PairedEvalCallback(
             eval_env,
-            best_model_save_path=str(self.run_dir),
+            action_model=self.action_model,
+            pair_directory=self.run_dir,
+            formal_domain=self.formal_domain,
+            formal_env_factory=self.env_factory,
+            formal_seeds=tuple(
+                range(
+                    self.evaluation_seed,
+                    self.evaluation_seed + self.evaluation_episodes,
+                )
+            ),
+            best_model_save_path=None,
             log_path=str(self.run_dir),
             eval_freq=self.eval_freq,
             n_eval_episodes=1,
@@ -196,37 +299,74 @@ class TransferTrainer:
             update_steps=self.decoder_update_steps,
             update_interval=max(min(self.n_steps // 2, 8), 1),
         )
+        budget_callback = ExactTransitionCallback(target=self.total_timesteps)
         callbacks = CallbackList(
-            [FiniteTrainingCallback(), decoder_callback, eval_callback]
+            [
+                FiniteTrainingCallback(),
+                decoder_callback,
+                eval_callback,
+                budget_callback,
+            ]
         )
-        self.model = PPO(
-            "MlpPolicy",
-            train_env,
-            n_steps=self.n_steps,
-            batch_size=self.batch_size,
-            learning_rate=self.learning_rate,
-            seed=self.seed,
-            verbose=0,
-            tensorboard_log=str(self.run_dir / "tensorboard"),
+        if self.resume_manifest is None:
+            self.model = PPO(
+                "MlpPolicy",
+                train_env,
+                n_steps=self.n_steps,
+                batch_size=self.batch_size,
+                learning_rate=self.learning_rate,
+                seed=self.seed,
+                verbose=0,
+                tensorboard_log=str(self.run_dir / "tensorboard"),
+            )
+            completed = 0
+        else:
+            self.model, paired = load_checkpoint_pair(
+                self.resume_manifest,
+                policy_loader=lambda path, device: PPO.load(
+                    path, env=train_env, device=device
+                ),
+                action_model=self.action_model,
+            )
+            completed = paired.transitions
+        remaining = self.total_timesteps - completed
+        if remaining < 0:
+            raise ValueError("resume checkpoint exceeds requested total timesteps")
+        if remaining:
+            self.model.learn(
+                total_timesteps=remaining,
+                callback=callbacks,
+                reset_num_timesteps=completed == 0,
+            )
+        latest_manifest = save_checkpoint_pair(
+            policy=self.model,
+            action_model=self.action_model,
+            directory=self.run_dir,
+            name="latest",
+            transitions=self.model.num_timesteps,
         )
-        self.model.learn(
-            total_timesteps=self.total_timesteps,
-            callback=callbacks,
-            reset_num_timesteps=True,
-        )
-        latest_base = self.run_dir / "latest_model"
-        self.model.save(latest_base)
-        latest = latest_base.with_suffix(".zip")
-        best = self.run_dir / "best_model.zip"
-        if not best.exists():
-            self.model.save(self.run_dir / "best_model")
+        write_transition_count(self.run_dir, self.model.num_timesteps)
+        best_manifest = self.run_dir / "best_pair.json"
+        if not best_manifest.exists():
+            best_manifest = save_checkpoint_pair(
+                policy=self.model,
+                action_model=self.action_model,
+                directory=self.run_dir,
+                name="best",
+                transitions=self.model.num_timesteps,
+            )
+        latest = self.run_dir / "latest_policy.zip"
+        best = self.run_dir / "best_policy.zip"
         train_env.close()
         eval_env.close()
         return TrainingArtifacts(
             latest_checkpoint=latest,
             best_checkpoint=best,
+            latest_manifest=latest_manifest,
+            best_manifest=best_manifest,
             evaluation_log=self.run_dir / "evaluations.npz",
         )
+
 
 # Imported after trainer definitions to keep exploration lifecycle isolated.
 from etl_sar.exploration import DirectionalExplorationWrapper, ExploreTrainer

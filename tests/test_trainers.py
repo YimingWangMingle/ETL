@@ -76,6 +76,8 @@ def test_transfer_trainer_runs_latent_ppo_and_writes_checkpoints(tmp_path) -> No
 
     assert result.latest_checkpoint.exists()
     assert result.best_checkpoint.exists()
+    assert result.latest_manifest.exists()
+    assert result.best_manifest.exists()
     assert trainer.model is not None
     assert trainer.model.action_space.shape == (20,)
 

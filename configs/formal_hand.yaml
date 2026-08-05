@@ -1,0 +1,12 @@
+domain: hand
+source_env: myoHandReorient8-v0
+target_env: myoHandReorient100-v0
+action_dim: 39
+source_budget: 1000000
+target_budget: 19000000
+lattice_budget: 20000000
+seeds: [0, 1, 2, 3, 4]
+num_envs: 16
+checkpoint_interval: 250000
+intermediate_episodes: 20
+final_episodes: 500

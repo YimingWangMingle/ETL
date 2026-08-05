@@ -157,7 +157,7 @@ Invoke-Stage -Label "hand/baseline" -Domain "hand" -ConfigPath $handConfig `
     -Budgets $handBudgets -Seed 7 `
     -CommandText "$EtlSar transfer --config $handConfig --bundle $handBundle --run-dir $handBaseline --timesteps 20000 --decoder-freeze-steps 2000 --eval-freq 5000 --sar-scale 0.0" `
     -StageDirectory $handBaseline `
-    -ExpectedArtifacts @((Join-Path $handBaseline "latest_model.zip")) `
+    -ExpectedArtifacts @((Join-Path $handBaseline "latest_pair.json")) `
     -Action {
         & $EtlSar transfer --config $handConfig --bundle $handBundle `
             --run-dir $handBaseline --timesteps 20000 `
@@ -168,7 +168,7 @@ Invoke-Stage -Label "hand/extension" -Domain "hand" -ConfigPath $handConfig `
     -Budgets $handBudgets -Seed 7 `
     -CommandText "$EtlSar transfer --config $handConfig --bundle $handBundle --run-dir $handExtension --timesteps 20000 --decoder-freeze-steps 2000 --eval-freq 5000 --sar-scale 1.0" `
     -StageDirectory $handExtension `
-    -ExpectedArtifacts @((Join-Path $handExtension "latest_model.zip")) `
+    -ExpectedArtifacts @((Join-Path $handExtension "latest_pair.json")) `
     -Action {
         & $EtlSar transfer --config $handConfig --bundle $handBundle `
             --run-dir $handExtension --timesteps 20000 `
@@ -177,24 +177,24 @@ Invoke-Stage -Label "hand/extension" -Domain "hand" -ConfigPath $handConfig `
 
 Invoke-Stage -Label "hand/baseline-evaluation" -Domain "hand" -ConfigPath $handConfig `
     -Budgets $handBudgets -Seed 7 `
-    -CommandText "$EtlSar evaluate --config $handConfig --bundle $handBundle --model-path $handBaseline/latest_model.zip --output-dir $handBaselineEval --episodes 10 --environment-steps 20000 --sar-scale 0.0" `
+    -CommandText "$EtlSar evaluate --config $handConfig --bundle $handBundle --pair-manifest $handBaseline/latest_pair.json --output-dir $handBaselineEval --episodes 10 --environment-steps 20000 --sar-scale 0.0" `
     -StageDirectory $handBaselineEval `
     -ExpectedArtifacts @((Join-Path $handBaselineEval "summary.json"), (Join-Path $handBaselineEval "episodes.csv")) `
     -Action {
         & $EtlSar evaluate --config $handConfig --bundle $handBundle `
-            --model-path (Join-Path $handBaseline "latest_model.zip") `
+            --pair-manifest (Join-Path $handBaseline "latest_pair.json") `
             --output-dir $handBaselineEval --episodes 10 `
             --environment-steps 20000 --sar-scale 0.0
     }
 
 Invoke-Stage -Label "hand/extension-evaluation" -Domain "hand" -ConfigPath $handConfig `
     -Budgets $handBudgets -Seed 7 `
-    -CommandText "$EtlSar evaluate --config $handConfig --bundle $handBundle --model-path $handExtension/latest_model.zip --output-dir $handExtensionEval --episodes 10 --environment-steps 20000 --sar-scale 1.0" `
+    -CommandText "$EtlSar evaluate --config $handConfig --bundle $handBundle --pair-manifest $handExtension/latest_pair.json --output-dir $handExtensionEval --episodes 10 --environment-steps 20000 --sar-scale 1.0" `
     -StageDirectory $handExtensionEval `
     -ExpectedArtifacts @((Join-Path $handExtensionEval "summary.json"), (Join-Path $handExtensionEval "episodes.csv")) `
     -Action {
         & $EtlSar evaluate --config $handConfig --bundle $handBundle `
-            --model-path (Join-Path $handExtension "latest_model.zip") `
+            --pair-manifest (Join-Path $handExtension "latest_pair.json") `
             --output-dir $handExtensionEval --episodes 10 `
             --environment-steps 20000 --sar-scale 1.0
     }
@@ -245,7 +245,7 @@ Invoke-Stage -Label "leg/baseline" -Domain "leg" -ConfigPath $legConfig `
     -Budgets $legBudgets -Seed 11 `
     -CommandText "$EtlSar transfer --config $legConfig --bundle $legBundle --run-dir $legBaseline --timesteps 20000 --decoder-freeze-steps 2000 --eval-freq 5000 --sar-scale 0.0" `
     -StageDirectory $legBaseline `
-    -ExpectedArtifacts @((Join-Path $legBaseline "latest_model.zip")) `
+    -ExpectedArtifacts @((Join-Path $legBaseline "latest_pair.json")) `
     -Action {
         & $EtlSar transfer --config $legConfig --bundle $legBundle `
             --run-dir $legBaseline --timesteps 20000 `
@@ -256,7 +256,7 @@ Invoke-Stage -Label "leg/extension" -Domain "leg" -ConfigPath $legConfig `
     -Budgets $legBudgets -Seed 11 `
     -CommandText "$EtlSar transfer --config $legConfig --bundle $legBundle --run-dir $legExtension --timesteps 20000 --decoder-freeze-steps 2000 --eval-freq 5000 --sar-scale 1.0" `
     -StageDirectory $legExtension `
-    -ExpectedArtifacts @((Join-Path $legExtension "latest_model.zip")) `
+    -ExpectedArtifacts @((Join-Path $legExtension "latest_pair.json")) `
     -Action {
         & $EtlSar transfer --config $legConfig --bundle $legBundle `
             --run-dir $legExtension --timesteps 20000 `
@@ -265,24 +265,24 @@ Invoke-Stage -Label "leg/extension" -Domain "leg" -ConfigPath $legConfig `
 
 Invoke-Stage -Label "leg/baseline-evaluation" -Domain "leg" -ConfigPath $legConfig `
     -Budgets $legBudgets -Seed 11 `
-    -CommandText "$EtlSar evaluate --config $legConfig --bundle $legBundle --model-path $legBaseline/latest_model.zip --output-dir $legBaselineEval --episodes 10 --environment-steps 20000 --sar-scale 0.0" `
+    -CommandText "$EtlSar evaluate --config $legConfig --bundle $legBundle --pair-manifest $legBaseline/latest_pair.json --output-dir $legBaselineEval --episodes 10 --environment-steps 20000 --sar-scale 0.0" `
     -StageDirectory $legBaselineEval `
     -ExpectedArtifacts @((Join-Path $legBaselineEval "summary.json"), (Join-Path $legBaselineEval "episodes.csv")) `
     -Action {
         & $EtlSar evaluate --config $legConfig --bundle $legBundle `
-            --model-path (Join-Path $legBaseline "latest_model.zip") `
+            --pair-manifest (Join-Path $legBaseline "latest_pair.json") `
             --output-dir $legBaselineEval --episodes 10 `
             --environment-steps 20000 --sar-scale 0.0
     }
 
 Invoke-Stage -Label "leg/extension-evaluation" -Domain "leg" -ConfigPath $legConfig `
     -Budgets $legBudgets -Seed 11 `
-    -CommandText "$EtlSar evaluate --config $legConfig --bundle $legBundle --model-path $legExtension/latest_model.zip --output-dir $legExtensionEval --episodes 10 --environment-steps 20000 --sar-scale 1.0" `
+    -CommandText "$EtlSar evaluate --config $legConfig --bundle $legBundle --pair-manifest $legExtension/latest_pair.json --output-dir $legExtensionEval --episodes 10 --environment-steps 20000 --sar-scale 1.0" `
     -StageDirectory $legExtensionEval `
     -ExpectedArtifacts @((Join-Path $legExtensionEval "summary.json"), (Join-Path $legExtensionEval "episodes.csv")) `
     -Action {
         & $EtlSar evaluate --config $legConfig --bundle $legBundle `
-            --model-path (Join-Path $legExtension "latest_model.zip") `
+            --pair-manifest (Join-Path $legExtension "latest_pair.json") `
             --output-dir $legExtensionEval --episodes 10 `
             --environment-steps 20000 --sar-scale 1.0
     }

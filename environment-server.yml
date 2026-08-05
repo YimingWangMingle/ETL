@@ -1,0 +1,9 @@
+name: etl-lattice-sar
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - git
+  - pip:
+      - -e .[myosuite,test]

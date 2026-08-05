@@ -12,9 +12,15 @@ from stable_baselines3 import PPO
 
 from etl_sar.action_model import ETLSARActionModel
 from etl_sar.bdr import StateEncoder
+from etl_sar.checkpoints import load_checkpoint_pair
 from etl_sar.config import ExperimentConfig
+from etl_sar.formal.config import FormalDomainConfig
+from etl_sar.formal.evaluate import evaluate_formal
+from etl_sar.formal.matrix import ExperimentMatrix
 from etl_sar.data import TrajectoryStore
 from etl_sar.envs import LatentActionWrapper, validate_environment
+from etl_sar.lattice.evaluation import evaluate_lattice_model
+from etl_sar.lattice.runtime import train_lattice_job
 from etl_sar.evaluation import EvaluationSummary, compare_runs, evaluate_checkpoint
 from etl_sar.exploration import ExploreTrainer, InsufficientSourceSuccessError
 from etl_sar.gmvae import GMVAE
@@ -103,6 +109,85 @@ def inspect(config: Path = typer.Option(..., exists=True, dir_okay=False)) -> No
     typer.echo("SB3 engineering: PPO trainers, callbacks, checkpoints, TensorBoard")
     typer.echo(f"source={cfg.source.env_id}")
     typer.echo(f"target={cfg.target.env_id}")
+
+
+@app.command("formal-dry-run")
+def formal_dry_run(
+    hand_config: Path = typer.Option(..., exists=True, dir_okay=False),
+    leg_config: Path = typer.Option(..., exists=True, dir_okay=False),
+    output: Path = typer.Option(..., dir_okay=False),
+) -> None:
+    matrix = ExperimentMatrix.from_configs(
+        [
+            FormalDomainConfig.from_yaml(hand_config),
+            FormalDomainConfig.from_yaml(leg_config),
+        ]
+    )
+    payload = matrix.to_mapping()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    typer.echo(json.dumps(payload["summary"], indent=2))
+
+
+@app.command("formal-lattice-train")
+def formal_lattice_train(
+    domain: str = typer.Option(...),
+    env_id: str = typer.Option(...),
+    seed: int = typer.Option(..., min=0),
+    timesteps: int = typer.Option(..., min=1),
+    checkpoint_interval: int = typer.Option(250_000, min=1),
+    evaluation_episodes: int = typer.Option(20, min=1),
+    final_episodes: int = typer.Option(..., min=1),
+    num_envs: int = typer.Option(16, min=1),
+    run_dir: Path = typer.Option(..., file_okay=False),
+    device: str = typer.Option("auto"),
+) -> None:
+    """Train the pinned official Lattice configuration on a shared MyoSuite task."""
+    if domain not in {"hand", "leg"}:
+        raise typer.BadParameter("domain must be hand or leg")
+
+    def env_factory() -> gym.Env:
+        return _make_env(env_id)
+
+    def evaluate_at(model, vecnormalize, transitions: int) -> None:
+        seeds = ExperimentMatrix.seed_bank(
+            domain=domain, seed=seed, episodes=evaluation_episodes
+        )
+        evaluate_lattice_model(
+            model=model,
+            training_vecnormalize=vecnormalize,
+            env_factory=env_factory,
+            domain=domain,
+            seeds=seeds,
+            output_dir=run_dir / "evaluation" / f"checkpoint_{transitions}",
+            environment_steps=transitions,
+            recurrent=domain == "hand",
+        )
+
+    model = train_lattice_job(
+        domain=domain,
+        env_id=env_id,
+        seed=seed,
+        total_transitions=timesteps,
+        checkpoint_interval=checkpoint_interval,
+        run_dir=run_dir,
+        num_envs=num_envs,
+        device=device,
+        evaluate=evaluate_at,
+    )
+    evaluate_lattice_model(
+        model=model,
+        training_vecnormalize=model.get_env(),
+        env_factory=env_factory,
+        domain=domain,
+        seeds=ExperimentMatrix.seed_bank(
+            domain=domain, seed=seed, episodes=final_episodes
+        ),
+        output_dir=run_dir / "evaluation" / "final",
+        environment_steps=timesteps,
+        recurrent=domain == "hand",
+    )
+    typer.echo(str(run_dir / "latest_policy.zip"))
 
 
 @app.command()
@@ -262,7 +347,13 @@ def transfer(
     decoder_freeze_steps: int = typer.Option(10_000, min=0),
     sar_scale: float | None = typer.Option(None),
     eval_freq: int | None = typer.Option(None, min=1),
+    evaluation_episodes: int = typer.Option(1, min=1),
+    evaluation_seed: int = typer.Option(10_000, min=0),
+    resume_manifest: Path | None = typer.Option(
+        None, exists=True, dir_okay=False
+    ),
 ) -> None:
+    """Train the target policy and return its verified paired checkpoint manifest."""
     cfg = ExperimentConfig.from_yaml(config)
     probe = _make_env(cfg.target.env_id)
     action_model, representation = _load_bundle(
@@ -277,16 +368,20 @@ def transfer(
         total_timesteps=timesteps,
         decoder_freeze_steps=decoder_freeze_steps,
         eval_freq=eval_freq,
+        evaluation_episodes=evaluation_episodes,
+        evaluation_seed=evaluation_seed,
+        resume_manifest=resume_manifest,
+        formal_domain=cfg.limb.value,
         seed=cfg.seed,
     )
-    typer.echo(str(trainer.run().best_checkpoint))
+    typer.echo(str(trainer.run().best_manifest))
 
 
 @app.command()
 def evaluate(
     config: Path = typer.Option(..., exists=True, dir_okay=False),
     bundle: Path = typer.Option(..., exists=True, dir_okay=False),
-    model_path: Path = typer.Option(..., exists=True, dir_okay=False),
+    pair_manifest: Path = typer.Option(..., exists=True, dir_okay=False),
     output_dir: Path = typer.Option(..., file_okay=False),
     episodes: int = typer.Option(20, min=1),
     environment_steps: int = typer.Option(..., min=1),
@@ -298,7 +393,12 @@ def evaluate(
         cfg, bundle, base_env, sar_scale=sar_scale
     )
     env = LatentActionWrapper(base_env, action_model)
-    model = PPO.load(model_path)
+    try:
+        model, _ = load_checkpoint_pair(
+            pair_manifest, policy_loader=PPO.load, action_model=action_model
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
     summary = evaluate_checkpoint(
         model,
         env,
@@ -308,6 +408,43 @@ def evaluate(
         seed=cfg.seed + 10_000,
         environment_id=cfg.target.env_id,
         sar_scale=action_model.enabled_scale,
+    )
+    typer.echo(json.dumps(summary.__dict__, indent=2))
+
+
+@app.command("formal-etl-evaluate")
+def formal_etl_evaluate(
+    config: Path = typer.Option(..., exists=True, dir_okay=False),
+    bundle: Path = typer.Option(..., exists=True, dir_okay=False),
+    pair_manifest: Path = typer.Option(..., exists=True, dir_okay=False),
+    output_dir: Path = typer.Option(..., file_okay=False),
+    episodes: int = typer.Option(..., min=1),
+    environment_steps: int = typer.Option(..., min=1),
+) -> None:
+    """Evaluate an ETL pair with the shared formal metrics and seed bank."""
+    cfg = ExperimentConfig.from_yaml(config)
+    base_env = _make_env(cfg.target.env_id)
+    action_model, _ = _load_bundle(cfg, bundle, base_env)
+    env = LatentActionWrapper(base_env, action_model)
+    try:
+        model, _ = load_checkpoint_pair(
+            pair_manifest, policy_loader=PPO.load, action_model=action_model
+        )
+    except ValueError as error:
+        env.close()
+        raise typer.BadParameter(str(error)) from error
+    seeds = ExperimentMatrix.seed_bank(
+        domain=cfg.limb.value,
+        seed=cfg.seed,
+        episodes=episodes,
+    )
+    summary = evaluate_formal(
+        model,
+        env,
+        domain=cfg.limb.value,
+        seeds=seeds,
+        output_dir=output_dir,
+        environment_steps=environment_steps,
     )
     typer.echo(json.dumps(summary.__dict__, indent=2))
 

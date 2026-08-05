@@ -15,7 +15,10 @@ def test_minimal_pilot_script_contains_both_matched_domains() -> None:
     assert "--sar-scale 1.0" in text
     assert text.count("--timesteps 20000") >= 4
     assert text.count("--episodes 10") >= 4
-    assert "latest_model.zip" in text
+    assert text.count("latest_pair.json") >= 8
+    assert text.count("--pair-manifest") >= 8
+    assert "latest_model.zip" not in text
+    assert "--model-path" not in text
 
 
 def test_minimal_pilot_script_uses_validated_completion_markers() -> None:
