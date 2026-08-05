@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gymnasium as gym
 import numpy as np
+import pytest
 import torch
 from gymnasium import spaces
 
@@ -9,6 +10,7 @@ from etl_sar.action_model import ETLSARActionModel
 from etl_sar.bdr import StateEncoder
 from etl_sar.data import TrajectoryStore
 from etl_sar.gmvae import GMVAE
+from etl_sar.exploration import InsufficientSourceSuccessError
 from etl_sar.representation import RepresentationTrainer
 from etl_sar.trainers import DirectionalExplorationWrapper, ExploreTrainer
 from etl_sar.types import Limb
@@ -132,3 +134,63 @@ def test_explore_trainer_accepts_myosuite_solved_flag(tmp_path) -> None:
     trainer.run()
 
     assert store.success_pool().shape[0] > 0
+
+
+class NeverSolvedSourceEnv(TinySolvedSourceEnv):
+    def step(self, action):
+        observation, reward, terminated, truncated, _ = super().step(action)
+        return observation, reward, terminated, truncated, {"solved": False}
+
+
+def make_gated_trainer(tmp_path, env_factory, **overrides) -> ExploreTrainer:
+    values = {
+        "env_factory": env_factory,
+        "state_encoder": StateEncoder(4, 20, hidden_dims=(16,)),
+        "representation": make_representation(),
+        "trajectory_store": TrajectoryStore(
+            tmp_path / "data",
+            limb=Limb.HAND,
+            source_task="reorient8",
+            action_dim=6,
+        ),
+        "limb": Limb.HAND,
+        "source_task": "reorient8",
+        "run_dir": tmp_path / "run",
+        "total_timesteps": 64,
+        "n_steps": 16,
+        "batch_size": 8,
+        "representation_update_interval": 12,
+        "seed": 3,
+    }
+    values.update(overrides)
+    return ExploreTrainer(**values)
+
+
+def test_explore_stops_after_minimum_and_success_gate(tmp_path) -> None:
+    trainer = make_gated_trainer(
+        tmp_path,
+        TinySolvedSourceEnv,
+        min_timesteps=16,
+        min_success_actions=6,
+    )
+
+    artifacts = trainer.run()
+
+    assert artifacts.environment_steps == 16
+    assert artifacts.successful_actions >= 6
+
+
+def test_explore_reports_insufficient_success_at_max_budget(tmp_path) -> None:
+    trainer = make_gated_trainer(
+        tmp_path,
+        NeverSolvedSourceEnv,
+        total_timesteps=32,
+        min_timesteps=16,
+        min_success_actions=6,
+    )
+
+    with pytest.raises(
+        InsufficientSourceSuccessError,
+        match="insufficient_source_success",
+    ):
+        trainer.run()

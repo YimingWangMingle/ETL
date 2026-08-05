@@ -111,6 +111,8 @@ class _ExploreCallback(BaseCallback):
         update_interval: int,
         gmvae_update_steps: list[int],
         bdr_update_steps: list[int],
+        min_timesteps: int,
+        min_success_actions: int,
     ) -> None:
         super().__init__(verbose=0)
         self.state_encoder = state_encoder
@@ -121,6 +123,12 @@ class _ExploreCallback(BaseCallback):
         self.update_interval = update_interval
         self.gmvae_update_steps = gmvae_update_steps
         self.bdr_update_steps = bdr_update_steps
+        self.min_timesteps = min_timesteps
+        self.min_success_actions = min_success_actions
+        self.success_gate_met = False
+        self.successful_actions = int(
+            trajectory_store.success_pool().shape[0]
+        )
         self.encoder_optimizer = torch.optim.Adam(state_encoder.parameters(), lr=1e-3)
         self.episode: list[dict[str, Any]] = []
         self.bdr_buffer: list[dict[str, Any]] = []
@@ -156,12 +164,23 @@ class _ExploreCallback(BaseCallback):
                 batch_size=32,
             )
             self.gmvae_update_steps.append(self.num_timesteps)
+        if self._success_gate_met():
+            self.success_gate_met = True
+            return False
         return True
+
+    def _success_gate_met(self) -> bool:
+        if self.min_success_actions <= 0:
+            return False
+        if self.num_timesteps < self.min_timesteps:
+            return False
+        return self.successful_actions >= self.min_success_actions
 
     def _flush_episode(self) -> None:
         episode = self.episode
         if not episode:
             return
+        episode_success = any(item["success"] for item in episode)
         self.trajectory_store.append_episode(
             TrajectoryEpisode(
                 limb=self.limb,
@@ -181,9 +200,11 @@ class _ExploreCallback(BaseCallback):
                     [item["truncated"] for item in episode], dtype=np.bool_
                 ),
                 behaviors=np.stack([item["behavior"] for item in episode]),
-                success=any(item["success"] for item in episode),
+                success=episode_success,
             )
         )
+        if episode_success:
+            self.successful_actions += len(episode)
         self.episode = []
 
     def _update_bdr(self) -> None:
@@ -213,10 +234,16 @@ class _ExploreCallback(BaseCallback):
         self.bdr_buffer.clear()
 
 
+class InsufficientSourceSuccessError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class ExplorationArtifacts:
     latest_checkpoint: Path
     representation_checkpoint: Path
+    environment_steps: int
+    successful_actions: int
 
 
 class ExploreTrainer:
@@ -236,7 +263,13 @@ class ExploreTrainer:
         representation_update_interval: int,
         seed: int = 0,
         bonus_scale: float = 1.0,
+        min_timesteps: int = 0,
+        min_success_actions: int = 0,
     ) -> None:
+        if min_timesteps < 0 or min_timesteps > total_timesteps:
+            raise ValueError("min_timesteps must be between 0 and total_timesteps")
+        if min_success_actions < 0:
+            raise ValueError("min_success_actions must be nonnegative")
         self.env_factory = env_factory
         self.state_encoder = state_encoder
         self.representation = representation
@@ -250,6 +283,8 @@ class ExploreTrainer:
         self.representation_update_interval = representation_update_interval
         self.seed = seed
         self.bonus_scale = bonus_scale
+        self.min_timesteps = min_timesteps
+        self.min_success_actions = min_success_actions
         self.gmvae_update_steps: list[int] = []
         self.bdr_update_steps: list[int] = []
         self.model: PPO | None = None
@@ -278,6 +313,8 @@ class ExploreTrainer:
             update_interval=self.representation_update_interval,
             gmvae_update_steps=self.gmvae_update_steps,
             bdr_update_steps=self.bdr_update_steps,
+            min_timesteps=self.min_timesteps,
+            min_success_actions=self.min_success_actions,
         )
         self.model = PPO(
             "MlpPolicy",
@@ -289,6 +326,8 @@ class ExploreTrainer:
             tensorboard_log=str(self.run_dir / "tensorboard"),
         )
         self.model.learn(total_timesteps=self.total_timesteps, callback=callback)
+        environment_steps = int(self.model.num_timesteps)
+        successful_actions = int(self.trajectory_store.success_pool().shape[0])
         latest_base = self.run_dir / "latest_explorer"
         self.model.save(latest_base)
         env.close()
@@ -305,7 +344,19 @@ class ExploreTrainer:
             },
             representation_checkpoint,
         )
-        return ExplorationArtifacts(
+        artifacts = ExplorationArtifacts(
             latest_checkpoint=latest_base.with_suffix(".zip"),
             representation_checkpoint=representation_checkpoint,
+            environment_steps=environment_steps,
+            successful_actions=successful_actions,
         )
+        if (
+            self.min_success_actions > 0
+            and successful_actions < self.min_success_actions
+        ):
+            raise InsufficientSourceSuccessError(
+                "insufficient_source_success: "
+                f"required {self.min_success_actions}, collected {successful_actions} "
+                f"within {environment_steps} steps"
+            )
+        return artifacts

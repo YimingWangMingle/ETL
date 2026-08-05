@@ -51,3 +51,25 @@ def test_help_lists_complete_pipeline_commands() -> None:
         "explore", "fit-representation", "transfer", "evaluate", "compare"
     ):
         assert command in result.stdout
+
+
+def test_explore_rejects_minimum_over_maximum_budget(tmp_path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "explore",
+            "--config",
+            str(write_config(tmp_path)),
+            "--run-dir",
+            str(tmp_path / "run"),
+            "--timesteps",
+            "32",
+            "--min-timesteps",
+            "64",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "cannot exceed" in result.output

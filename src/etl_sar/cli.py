@@ -16,7 +16,7 @@ from etl_sar.config import ExperimentConfig
 from etl_sar.data import TrajectoryStore
 from etl_sar.envs import LatentActionWrapper, validate_environment
 from etl_sar.evaluation import EvaluationSummary, compare_runs, evaluate_checkpoint
-from etl_sar.exploration import ExploreTrainer
+from etl_sar.exploration import ExploreTrainer, InsufficientSourceSuccessError
 from etl_sar.gmvae import GMVAE
 from etl_sar.representation import RepresentationTrainer
 from etl_sar.synergy import SynergyArtifact
@@ -101,7 +101,11 @@ def explore(
     config: Path = typer.Option(..., exists=True, dir_okay=False),
     run_dir: Path = typer.Option(..., file_okay=False),
     timesteps: int = typer.Option(100_000, min=32),
+    min_timesteps: int = typer.Option(0, min=0),
+    min_success_actions: int = typer.Option(0, min=0),
 ) -> None:
+    if min_timesteps > timesteps:
+        raise typer.BadParameter("min_timesteps cannot exceed timesteps")
     cfg = ExperimentConfig.from_yaml(config)
     probe = _make_env(cfg.source.env_id)
     contract = validate_environment(probe)
@@ -145,9 +149,25 @@ def explore(
         batch_size=64,
         representation_update_interval=1024,
         seed=cfg.seed,
+        min_timesteps=min_timesteps,
+        min_success_actions=min_success_actions,
     )
-    artifacts = trainer.run()
-    typer.echo(str(artifacts.representation_checkpoint))
+    try:
+        artifacts = trainer.run()
+    except InsufficientSourceSuccessError as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(
+        json.dumps(
+            {
+                "representation_checkpoint": str(
+                    artifacts.representation_checkpoint
+                ),
+                "environment_steps": artifacts.environment_steps,
+                "successful_actions": artifacts.successful_actions,
+            },
+            indent=2,
+        )
+    )
 
 
 @app.command("fit-representation")
