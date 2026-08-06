@@ -35,3 +35,15 @@ def test_single_seed_launcher_is_isolated_sequential_and_cuda_checked() -> None:
     assert '--leg-config "${LEG_CONFIG}"' in script
     assert "sbatch" not in script
     assert "&" not in script
+
+
+def test_readme_documents_the_single_seed_server_profile() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "run_single_seed_10h.sh" in readme
+    assert "SHORT_OUTPUT_ROOT" in readme
+    assert "8.4M" in readme
+    assert "seed=0" in readme
+    assert "RTX 4090" in readme
+    assert "descriptive" in readme
+    assert "conda create -n etl-lattice-sar python=3.11" in readme
+    assert "python -m pytest -m myo -q" in readme

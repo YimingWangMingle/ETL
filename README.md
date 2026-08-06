@@ -102,3 +102,42 @@ python -m pytest -m myo -q
 ```
 
 第一条验证数学、数据隔离、GMVAE、SAR 硬门控、Lattice 对等性、配对 checkpoint、正式矩阵和统计；第二条要求本机安装 MyoSuite/MuJoCo 和对应任务资产。
+
+## Single-seed ten-hour server profile
+
+The short server profile compares ETL+SAR, ETL-noSAR, and official Lattice on
+both Hand and Leg with `seed=0`. It declares 8.4M attributed interactions and
+targets 6-9 hours on one RTX 4090, 16 CPU cores, 64 GB RAM, and at least 100 GB
+storage. Its output is descriptive; one seed does not support confidence
+intervals, significance tests, or a publication-level statistical claim.
+
+Create an isolated Python 3.11 environment after uploading the repository:
+
+```bash
+conda create -n etl-lattice-sar python=3.11 pip -y
+conda activate etl-lattice-sar
+pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+pip install -e ".[myosuite,test]"
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+python -m pytest -m myo -q
+```
+
+Validate the six-job matrix without training, then run every job sequentially:
+
+```bash
+bash scripts/run_single_seed_10h.sh dry-run
+SHORT_OUTPUT_ROOT=/data/single_seed_10h bash scripts/run_single_seed_10h.sh run
+```
+
+The `run` mode performs two shared source stages, six target jobs, and final
+aggregation. It never launches concurrent GPU jobs. Repeating the same command
+validates completed manifests and resumes incomplete ETL or Lattice checkpoints.
+To regenerate only the descriptive summary, run:
+
+```bash
+SHORT_OUTPUT_ROOT=/data/single_seed_10h bash scripts/run_single_seed_10h.sh aggregate
+```
+
+The short configs are `configs/single_seed_10h_hand.yaml` and
+`configs/single_seed_10h_leg.yaml`. They do not replace or modify the five-seed
+formal configs.
