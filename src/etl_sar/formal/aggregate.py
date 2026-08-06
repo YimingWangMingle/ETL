@@ -5,7 +5,7 @@ import itertools
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 
@@ -32,24 +32,96 @@ def _paired_sign_flip_p(treatment: list[float], baseline: list[float]) -> float:
     return float(np.mean(np.asarray(values) >= observed - 1e-15))
 
 
+def _expected_seeds(
+    rows: tuple[SeedResult, ...],
+    expected_seeds_by_domain: Mapping[str, Sequence[int]] | None,
+) -> dict[str, tuple[int, ...]]:
+    domains = ("hand", "leg")
+    if expected_seeds_by_domain is None:
+        expected = {
+            domain: tuple(sorted({row.seed for row in rows if row.domain == domain}))
+            for domain in domains
+        }
+    else:
+        if set(expected_seeds_by_domain) != set(domains):
+            raise ValueError("expected seeds must be provided for hand and leg")
+        expected = {
+            domain: tuple(int(seed) for seed in expected_seeds_by_domain[domain])
+            for domain in domains
+        }
+    for domain, seeds in expected.items():
+        if not seeds or len(seeds) != len(set(seeds)) or any(seed < 0 for seed in seeds):
+            raise ValueError(f"expected seeds for {domain} are invalid")
+    return expected
+
+
+def _ordered_methods(
+    rows: tuple[SeedResult, ...], domain: str, expected_seeds: tuple[int, ...]
+) -> dict[str, list[SeedResult]]:
+    domain_rows = [row for row in rows if row.domain == domain]
+    by_method: dict[str, list[SeedResult]] = {}
+    for method in ("etl_no_sar", "etl_sar", "lattice"):
+        ordered = sorted(
+            (row for row in domain_rows if row.method == method),
+            key=lambda row: row.seed,
+        )
+        if [row.seed for row in ordered] != list(expected_seeds):
+            raise ValueError(
+                f"{domain}/{method} must contain seeds {list(expected_seeds)}"
+            )
+        by_method[method] = ordered
+    return by_method
+
+
+def _summarize_single_seed(
+    rows: tuple[SeedResult, ...], expected: Mapping[str, tuple[int, ...]]
+) -> dict[str, Any]:
+    domains: dict[str, Any] = {}
+    for domain in ("hand", "leg"):
+        by_method = _ordered_methods(rows, domain, expected[domain])
+        methods = {
+            method: {
+                "seed": results[0].seed,
+                "normalized_auc": results[0].normalized_auc,
+                "final_primary": results[0].final_primary,
+            }
+            for method, results in by_method.items()
+        }
+        treatment = by_method["etl_sar"][0]
+        comparisons = {}
+        for baseline_name in ("etl_no_sar", "lattice"):
+            baseline = by_method[baseline_name][0]
+            comparisons[baseline_name] = {
+                "auc_delta": treatment.normalized_auc - baseline.normalized_auc,
+                "final_delta": treatment.final_primary - baseline.final_primary,
+            }
+        domains[domain] = {"methods": methods, "comparisons": comparisons}
+    return {
+        "analysis_mode": "descriptive_single_seed",
+        "domains": domains,
+        "protocol_success": None,
+    }
+
+
 def summarize_seed_results(
-    records: Iterable[SeedResult], *, bootstrap_seed: int
+    records: Iterable[SeedResult],
+    *,
+    bootstrap_seed: int,
+    expected_seeds_by_domain: Mapping[str, Sequence[int]] | None = None,
 ) -> dict[str, Any]:
     rows = tuple(records)
+    expected = _expected_seeds(rows, expected_seeds_by_domain)
+    if all(len(seeds) == 1 for seeds in expected.values()):
+        return _summarize_single_seed(rows, expected)
+    if any(len(seeds) == 1 for seeds in expected.values()):
+        raise ValueError("hand and leg must use the same aggregation mode")
     domains: dict[str, Any] = {}
     protocol_success = True
     for domain in ("hand", "leg"):
-        domain_rows = [row for row in rows if row.domain == domain]
         methods: dict[str, Any] = {}
-        by_method: dict[str, list[SeedResult]] = {}
+        by_method = _ordered_methods(rows, domain, expected[domain])
         for method in ("etl_no_sar", "etl_sar", "lattice"):
-            ordered = sorted(
-                (row for row in domain_rows if row.method == method),
-                key=lambda row: row.seed,
-            )
-            if [row.seed for row in ordered] != [0, 1, 2, 3, 4]:
-                raise ValueError(f"{domain}/{method} must contain seeds 0..4")
-            by_method[method] = ordered
+            ordered = by_method[method]
             methods[method] = {
                 "auc": asdict(
                     aggregate_values(
@@ -152,7 +224,13 @@ def write_aggregate(
 ) -> Path:
     root = Path(output_root)
     records = collect_seed_results(matrix, root)
-    aggregate = summarize_seed_results(records, bootstrap_seed=bootstrap_seed)
+    aggregate = summarize_seed_results(
+        records,
+        bootstrap_seed=bootstrap_seed,
+        expected_seeds_by_domain={
+            config.domain: config.seeds for config in matrix.configs
+        },
+    )
     result_dir = root / "aggregate"
     result_dir.mkdir(parents=True, exist_ok=True)
     with (result_dir / "per_seed.csv").open("w", newline="", encoding="utf-8") as stream:
