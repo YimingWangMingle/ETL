@@ -1,0 +1,12 @@
+domain: leg
+source_env: myoLegWalk-v0
+target_env: myoLegRoughTerrainWalk-v0
+action_dim: 80
+source_budget: 120000
+target_budget: 1080000
+lattice_budget: 1200000
+seeds: [0]
+num_envs: 16
+checkpoint_interval: 120000
+intermediate_episodes: 10
+final_episodes: 50

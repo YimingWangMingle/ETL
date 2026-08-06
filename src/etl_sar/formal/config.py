@@ -72,8 +72,12 @@ class FormalDomainConfig:
     def validate(self) -> None:
         if self.domain not in {"hand", "leg"}:
             raise ValueError("formal domain must be hand or leg")
-        if self.seeds != (0, 1, 2, 3, 4):
-            raise ValueError("formal seeds must be exactly 0,1,2,3,4")
+        if (
+            not self.seeds
+            or len(self.seeds) != len(set(self.seeds))
+            or any(seed < 0 for seed in self.seeds)
+        ):
+            raise ValueError("formal seeds must be nonempty, unique, and nonnegative")
         if self.source_budget + self.target_budget != self.lattice_budget:
             raise ValueError("formal comparison requires equal total interactions")
         positive = (
