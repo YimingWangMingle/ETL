@@ -16,3 +16,22 @@ def test_slurm_submission_orders_sources_before_targets() -> None:
     assert "--array=0-9" in script
     assert "--array=0-29" in script
     assert "afterok" in script
+
+
+def test_single_seed_launcher_is_isolated_sequential_and_cuda_checked() -> None:
+    script = (ROOT / "scripts" / "run_single_seed_10h.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "configs/single_seed_10h_hand.yaml" in script
+    assert "configs/single_seed_10h_leg.yaml" in script
+    assert "runs/single_seed_10h" in script
+    assert "SHORT_OUTPUT_ROOT" in script
+    assert "torch.cuda.is_available()" in script
+    assert "for index in 0 1" in script
+    assert "for index in 0 1 2 3 4 5" in script
+    assert "etl_sar.formal.server" in script
+    assert "etl_sar.formal.aggregate_cli" in script
+    assert '--hand-config "${HAND_CONFIG}"' in script
+    assert '--leg-config "${LEG_CONFIG}"' in script
+    assert "sbatch" not in script
+    assert "&" not in script
