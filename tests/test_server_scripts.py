@@ -47,3 +47,11 @@ def test_readme_documents_the_single_seed_server_profile() -> None:
     assert "descriptive" in readme
     assert "conda create -n etl-lattice-sar python=3.11" in readme
     assert "python -m pytest -m myo -q" in readme
+
+
+def test_shell_scripts_use_unix_line_endings() -> None:
+    scripts = sorted((ROOT / "scripts").glob("*.sh"))
+    assert scripts
+    for script in scripts:
+        content = script.read_bytes()
+        assert b"\r\n" not in content, f"{script.name} contains CRLF line endings"
