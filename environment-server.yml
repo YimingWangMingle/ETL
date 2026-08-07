@@ -6,4 +6,4 @@ dependencies:
   - pip
   - git
   - pip:
-      - -e .[myosuite,test]
+      - -e .[myosuite,dmc,test]

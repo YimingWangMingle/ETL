@@ -49,6 +49,36 @@ def _predict(
     return action, next_state
 
 
+def _resolve_mujoco_model_data(env: gym.Env) -> tuple[Any, Any]:
+    unwrapped = env.unwrapped
+    candidates = (
+        unwrapped,
+        getattr(unwrapped, "sim", None),
+        getattr(unwrapped, "mj_sim", None),
+    )
+    model = next(
+        (
+            candidate.model
+            for candidate in candidates
+            if candidate is not None and hasattr(candidate, "model")
+        ),
+        None,
+    )
+    data = next(
+        (
+            candidate.data
+            for candidate in candidates
+            if candidate is not None and hasattr(candidate, "data")
+        ),
+        None,
+    )
+    if model is None or data is None:
+        raise AttributeError(
+            "environment does not expose MuJoCo model/data directly or through sim"
+        )
+    return model, data
+
+
 def evaluate_formal(
     model: Any,
     env: gym.Env,
@@ -66,15 +96,16 @@ def evaluate_formal(
         raise ValueError("formal evaluation requires a nonempty unique seed bank")
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    root_address = (
-        resolve_root_x_qpos_address(env.unwrapped.model) if domain == "leg" else None
-    )
+    mujoco_model = mujoco_data = None
+    if domain == "leg":
+        mujoco_model, mujoco_data = _resolve_mujoco_model_data(env)
+    root_address = resolve_root_x_qpos_address(mujoco_model) if mujoco_model is not None else None
     rows: list[EpisodeMetrics] = []
     try:
         for episode, seed in enumerate(seed_bank):
             observation, _ = env.reset(seed=seed)
             start_x = (
-                float(env.unwrapped.data.qpos[root_address])
+                float(mujoco_data.qpos[root_address])
                 if root_address is not None
                 else None
             )
@@ -115,7 +146,7 @@ def evaluate_formal(
                 (
                     last_root_x
                     if last_root_x is not None
-                    else float(env.unwrapped.data.qpos[root_address])
+                    else float(mujoco_data.qpos[root_address])
                 )
                 if root_address is not None
                 else None

@@ -141,3 +141,44 @@ SHORT_OUTPUT_ROOT=/data/single_seed_10h bash scripts/run_single_seed_10h.sh aggr
 The short configs are `configs/single_seed_10h_hand.yaml` and
 `configs/single_seed_10h_leg.yaml`. They do not replace or modify the five-seed
 formal configs.
+
+## DMC walk-to-run transfer pilot
+
+The selected ETL-favorable pilot replaces Hand/Leg with `humanoid/walk -> run`
+and `dog/walk -> run`. It compares exactly `ETL+SAR`, `ETL-noSAR`, and matched
+Lattice with seed 0. Every method is charged 1M transitions: ETL uses 200k
+source plus 800k target transitions, while Lattice uses 1M target transitions.
+All target methods share the same SAC backbone and observation normalization.
+Results are descriptive because this profile uses only one seed.
+
+After uploading the whole repository to the server, create an isolated Python
+3.11 environment and install the DMC extra:
+
+```bash
+conda create -n etl-dmc python=3.11 pip -y
+conda activate etl-dmc
+pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+pip install -e ".[dmc,test]"
+python -c "from dm_control import suite; print(suite.load('humanoid', 'walk'))"
+python -m pytest tests/test_dmc_config.py tests/test_dmc_env.py tests/test_dmc_protocol.py -q
+```
+
+Inspect the six target jobs, then run the complete experiment sequentially:
+
+```bash
+bash scripts/run_dmc_transfer_pilot.sh dry-run
+DMC_OUTPUT_ROOT=/root/autodl-tmp/dmc_transfer_pilot bash scripts/run_dmc_transfer_pilot.sh run
+```
+
+The same `run` command skips completed source/target jobs and resumes incomplete
+target SAC jobs from policy, replay-buffer, action-model, and VecNormalize
+checkpoints. To rebuild only the comparison table and JSON summary:
+
+```bash
+DMC_OUTPUT_ROOT=/root/autodl-tmp/dmc_transfer_pilot bash scripts/run_dmc_transfer_pilot.sh aggregate
+```
+
+Final results are written to
+`$DMC_OUTPUT_ROOT/aggregate/results.csv` and `summary.json`. Training curves use
+return AUC over the full charged budget; ETL curves include their 200k source
+cost. This pilot does not reproduce the papers' 10M-step, multi-seed protocol.

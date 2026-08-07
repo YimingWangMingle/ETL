@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from types import SimpleNamespace
 
 import gymnasium as gym
 import numpy as np
@@ -58,6 +59,32 @@ class LegEvalEnv(gym.Env[np.ndarray, np.ndarray]):
         )
 
 
+class SimOnlyLegEvalEnv(LegEvalEnv):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sim = SimpleNamespace(model=self.model, data=self.data)
+        del self.model
+        del self.data
+
+    def reset(self, *, seed=None, options=None):
+        gym.Env.reset(self, seed=seed)
+        self.steps = 0
+        self.sim.data.qpos[4] = float((0 if seed is None else seed) % 3)
+        return np.zeros(3, dtype=np.float32), {}
+
+    def step(self, action):
+        self.steps += 1
+        self.sim.data.qpos[4] += 0.5
+        terminated = self.steps == 2
+        return (
+            np.zeros(3, dtype=np.float32),
+            1.0,
+            terminated,
+            False,
+            {"solved": terminated, "velocity": 0.8, "target_velocity": 1.0},
+        )
+
+
 class RecurrentPredictor:
     def __init__(self) -> None:
         self.episode_starts = []
@@ -91,3 +118,17 @@ def test_formal_evaluation_writes_raw_leg_metrics_and_resets_recurrent_state(tmp
     assert float(rows[0]["velocity_tracking_error"]) == pytest.approx(0.2)
     assert float(rows[0]["muscle_effort"]) == pytest.approx(0.25)
     assert (tmp_path / "summary.json").is_file()
+
+
+def test_formal_evaluation_accepts_model_and_data_exposed_through_sim(tmp_path) -> None:
+    result = evaluate_formal(
+        RecurrentPredictor(),
+        SimOnlyLegEvalEnv(),
+        domain="leg",
+        seeds=[101],
+        output_dir=tmp_path,
+        environment_steps=100,
+        recurrent=True,
+    )
+
+    assert result.mean_return == pytest.approx(2.0)

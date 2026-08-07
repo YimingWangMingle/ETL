@@ -20,6 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dmc = ["dm-control>=1.0.16,<2"]
 myosuite = ["myosuite>=2.12,<2.13"]
 test = ["pytest>=8,<9"]
 
