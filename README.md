@@ -1,184 +1,229 @@
-# SAR-guided ETL
+# ETL-SAR: Source-to-Target Action Representation Transfer
 
-这是一个以 ETL 为算法主干的新实现：ETL 负责方向性探索、BDR、GMVAE、潜在动作策略和 Eq. 10 decoder fine-tuning；SAR 从简单任务成功轨迹提取 20 个 ICAPCA synergies，并在复杂任务中作为冻结的低秩动作修正。正式实验另包含固定 commit 的官方 Lattice 算法基线。
+This repository is an ETL-dominant reinforcement-learning research prototype. It combines:
 
-## 方法边界
+- **ETL** for directional source-task exploration, behavior-aware representation learning, a GMVAE action representation, latent-action control, and supervised decoder fine-tuning;
+- **SAR-style transfer** for extracting a low-rank PCA/ICA action-synergy basis from high-return source trajectories and applying it as a bounded residual on the target task; and
+- **Lattice** as a matched exploration baseline implemented from the official Lattice covariance equations and adapted to Stable-Baselines3 2.x.
 
-- `ExploreTrainer`：每个 episode 采样一个 20 维单位方向，以 ETL Eq. 1 的内积 bonus 引导完整肌肉动作 PPO，训练防坍缩 BDR encoder，并从增长中的 action buffer 交替更新 GMVAE。
-- `SynergyArtifact`：仅使用源任务成功轨迹，执行 StandardScaler -> PCA(20) -> FastICA(20)，将控制系数归一化到 `[-1,1]`。
-- `ETLSARActionModel`：ETL decoder 是动作主输出；SAR residual 的 L2 范数被硬限制为 ETL 输出的 20%。`enabled_scale=0` 是同代码 SB3-ETL 内部基线。
-- `TransferTrainer`：SB3 PPO 只在 20 维 ETL latent action space 中训练；环境 wrapper 负责解码。冻结期后，decoder 使用交互 `(z_t,a_t)` 对执行独立的 ETL Eq. 10 监督更新，不接收 PPO 梯度。
+The main reproducible experiment is a single-seed DeepMind Control Suite (DMC) walk-to-run pilot on Dog and Humanoid. This is an independent extension, not an official joint release from the ETL, SAR, or Lattice authors.
 
-BDR 的低奖励差正则使用有界 hinge 实现论文文字中的 anti-collapse 语义，避免直接最大化无界距离。
+## Method overview
 
-## 安装
+The source-to-target pipeline is:
 
-目标环境为 Python 3.11：
+1. Train an ETL directional explorer on the easier `walk` source task.
+2. Store complete source episodes and train a GMVAE on their actions.
+3. Select actions from the highest-return 25% of source episodes.
+4. Fit a PCA-to-FastICA synergy basis on those selected actions.
+5. Train SAC on the harder `run` target task in the learned ETL latent action space.
+6. For ETL+SAR, add a learned residual in the frozen synergy subspace. Its L2 norm is hard-capped at 20% of the ETL decoder output norm.
+7. After the initial target phase, fine-tune the ETL decoder with an independent supervised update over observed latent/action pairs.
 
-```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[test,myosuite]"
-```
+ETL+SAR and ETL-noSAR load the same serialized source bundle. Their target runs differ only in whether the SAR residual scale is `1.0` or `0.0`.
 
-## 快速协议
+### Compared methods
 
-```powershell
-etl-sar inspect --config configs/hand_quick.yaml
-etl-sar explore --config configs/hand_quick.yaml --run-dir runs/hand_source --timesteps 100000
-etl-sar fit-representation --config configs/hand_quick.yaml --data-dir runs/hand_source/data --explore-checkpoint runs/hand_source/representation.pt --output-dir runs/hand_representation
-etl-sar transfer --config configs/hand_quick.yaml --bundle runs/hand_representation/representation_bundle.pt --run-dir runs/hand_target --timesteps 100000
-etl-sar evaluate --config configs/hand_quick.yaml --bundle runs/hand_representation/representation_bundle.pt --pair-manifest runs/hand_target/best_pair.json --output-dir runs/hand_eval --episodes 20 --environment-steps 100000
-```
+| Method | Source stage | Target action space | Exploration | SAR residual |
+| --- | --- | --- | --- | --- |
+| `etl_sar` | ETL source exploration + GMVAE + PCA/ICA | 4-D ETL latent action | SAC with gSDE | Enabled, capped at 20% |
+| `etl_no_sar` | Same source bundle as `etl_sar` | 4-D ETL latent action | SAC with gSDE | Disabled |
+| `lattice` | None | Native environment action | SAC with Lattice state-dependent covariance | Not applicable |
 
-Leg 使用 `configs/leg_quick.yaml`，泛化链为 `myoLegWalk-v0 -> myoLegRoughTerrainWalk-v0`。
+All three target methods use the same SAC optimizer settings, two-layer 256-unit policy/value networks, observation normalization, evaluation seeds, action repeat, and total charged interaction budget. The Lattice run uses its native action space because that is part of the method, whereas ETL methods use their learned latent action space.
 
-## 最小 Hand + Leg 泛化试验
+The DMC Lattice baseline is a controlled adaptation, not a reproduction of an experiment from the Lattice paper: the official distribution equations and policy mechanism are retained, while the environment and shared SAC training protocol are supplied by this repository. See [`third_party/lattice/UPSTREAM.md`](third_party/lattice/UPSTREAM.md) for the pinned upstream commit, file hashes, license, and compatibility boundary.
 
-```powershell
-.\scripts\run_minimal_pilot.ps1 -WhatIf
-.\scripts\run_minimal_pilot.ps1
-```
+## DMC experiment protocol
 
-如果 `etl-sar` 不在 `PATH` 中：
+Two source-to-target chains are evaluated with `seed=0`:
 
-```powershell
-.\scripts\run_minimal_pilot.ps1 -EtlSar .\.venv\Scripts\etl-sar.exe
-```
+| Domain | Source task | Target task | ETL source | ETL target | Lattice target | Charged total per method |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| Dog | `walk` | `run` | 200,000 | 800,000 | 1,000,000 | 1,000,000 |
+| Humanoid | `walk` | `run` | 200,000 | 800,000 | 1,000,000 | 1,000,000 |
 
-输出写入 `runs/minimal_pilot`。每个阶段使用包含配置 SHA-256、预算、种子和命令的 `stage.complete.json`，失败后可直接重新执行同一命令。基线使用 `--sar-scale 0.0`，extension 使用 `--sar-scale 1.0`。最小试验只用于初步判断，不代表完整收敛或统计显著性结论。
+ETL source interactions are charged separately to both ETL methods even though the two runs share one physical source bundle. Evaluation occurs every 100,000 charged transitions using 10 fixed episodes, followed by a 50-episode final evaluation. Across the six method/domain jobs, the comparison declares 6,000,000 charged interactions; the two shared source stages are physically executed once each.
 
-## 正式 ETL / SAR / Lattice 对比
+## Requirements
 
-正式配置固定为 5 个种子、30 个目标任务和 525M 归属交互量：
+The tested server profile is:
 
-```bash
-python -m etl_sar.formal.server dry-run > formal_matrix.json
-```
+- Ubuntu 22.04;
+- Python 3.11;
+- one CUDA-capable NVIDIA GPU (an RTX 4090 was used for the pilot);
+- 16 CPU cores and 64 GB RAM are sufficient;
+- at least 100 GB of free disk space is recommended for environments, replay buffers, checkpoints, TensorBoard logs, and results.
 
-服务器环境：
+Training is GPU-enabled, but DMC simulation remains CPU-bound enough that GPU utilization may fluctuate. Runtime varies substantially by CPU, storage, driver, and evaluation speed; plan for several hours and allow more than 10 hours until timing has been measured on the target server.
 
-```bash
-conda env create -f environment-server.yml
-conda activate etl-lattice-sar
-python -m pip install -e ".[myosuite,test]"
-```
+## Installation on a clean Ubuntu server
 
-先确认服务器 CUDA 与 MyoSuite 冒烟测试，再提交 Slurm：
+Clone the repository and enter its root:
 
 ```bash
-python -m pytest -m myo -q
-bash scripts/run_formal_server.sh dry-run
-bash scripts/submit_formal_slurm.sh
+git clone https://github.com/YimingWangMingle/ETL.git
+cd ETL
 ```
 
-没有 Slurm 时按索引执行。源数组为 `0..9`，完成后运行目标数组 `0..29`：
+Install the headless rendering libraries:
 
 ```bash
-for index in $(seq 0 9); do bash scripts/run_formal_server.sh source "$index"; done
-for index in $(seq 0 29); do bash scripts/run_formal_server.sh target "$index"; done
-bash scripts/aggregate_formal.sh
+apt-get update
+apt-get install -y libegl1 libgl1 libglfw3 libglew2.2
 ```
 
-可设置 `FORMAL_OUTPUT_ROOT=/path/to/results` 改变输出位置。重复同一命令会验证完成 manifest；中断任务从 `latest` policy、VecNormalize、ETL action model 和（Leg SAC）replay buffer 恢复。
-
-正式协议的关键约束：
-
-- Hand：ETL 为 1M source + 19M target，Lattice 为 20M target；最终每 seed 评估 500 episodes。
-- Leg：ETL 为 1.5M source + 13.5M target，Lattice 为 15M target；最终每 seed 评估 100 episodes。
-- 所有方法每 250k transitions 用同一固定 seed bank 评估 20 episodes。
-- `ETL-noSAR` 与 `ETL+SAR` 按 domain/seed 共享同一个源 bundle，目标阶段只改变 SAR scale。
-- Hand Lattice 保留官方 RecurrentPPO Reorient 配置；Leg 标记为官方 SAC locomotion 配置适配 MyoLeg。
-- 中间 SAC 快照不复制 replay buffer；只有可恢复的 `latest_replay_buffer.pkl` 保留。
-- 成功要求 ETL+SAR 在 Hand 和 Leg 的 normalized AUC 上都超过两个 baseline，配对 bootstrap CI 下界大于 0，且最终主指标不退化。
-
-官方 Lattice 源码、MIT 许可证、固定 commit 和兼容性边界记录在 `third_party/lattice/UPSTREAM.md`。
-
-## 测试
-
-```powershell
-python -m pytest -m "not myo" -q
-python -m pytest -m myo -q
-```
-
-第一条验证数学、数据隔离、GMVAE、SAR 硬门控、Lattice 对等性、配对 checkpoint、正式矩阵和统计；第二条要求本机安装 MyoSuite/MuJoCo 和对应任务资产。
-
-## Single-seed ten-hour server profile
-
-The short server profile compares ETL+SAR, ETL-noSAR, and official Lattice on
-both Hand and Leg with `seed=0`. It declares 8.4M attributed interactions and
-targets 6-9 hours on one RTX 4090, 16 CPU cores, 64 GB RAM, and at least 100 GB
-storage. Its output is descriptive; one seed does not support confidence
-intervals, significance tests, or a publication-level statistical claim.
-
-Create an isolated Python 3.11 environment after uploading the repository:
-
-```bash
-conda create -n etl-lattice-sar python=3.11 pip -y
-conda activate etl-lattice-sar
-pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
-pip install -e ".[myosuite,test]"
-python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
-python -m pytest -m myo -q
-```
-
-Validate the six-job matrix without training, then run every job sequentially:
-
-```bash
-bash scripts/run_single_seed_10h.sh dry-run
-SHORT_OUTPUT_ROOT=/data/single_seed_10h bash scripts/run_single_seed_10h.sh run
-```
-
-The `run` mode performs two shared source stages, six target jobs, and final
-aggregation. It never launches concurrent GPU jobs. Repeating the same command
-validates completed manifests and resumes incomplete ETL or Lattice checkpoints.
-To regenerate only the descriptive summary, run:
-
-```bash
-SHORT_OUTPUT_ROOT=/data/single_seed_10h bash scripts/run_single_seed_10h.sh aggregate
-```
-
-The short configs are `configs/single_seed_10h_hand.yaml` and
-`configs/single_seed_10h_leg.yaml`. They do not replace or modify the five-seed
-formal configs.
-
-## DMC walk-to-run transfer pilot
-
-The selected ETL-favorable pilot replaces Hand/Leg with `humanoid/walk -> run`
-and `dog/walk -> run`. It compares exactly `ETL+SAR`, `ETL-noSAR`, and matched
-Lattice with seed 0. Every method is charged 1M transitions: ETL uses 200k
-source plus 800k target transitions, while Lattice uses 1M target transitions.
-All target methods share the same SAC backbone and observation normalization.
-Results are descriptive because this profile uses only one seed.
-
-After uploading the whole repository to the server, create an isolated Python
-3.11 environment and install the DMC extra:
+Create an isolated Python 3.11 environment:
 
 ```bash
 conda create -n etl-dmc python=3.11 pip -y
 conda activate etl-dmc
-pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
-pip install -e ".[dmc,test]"
-python -c "from dm_control import suite; print(suite.load('humanoid', 'walk'))"
-python -m pytest tests/test_dmc_config.py tests/test_dmc_env.py tests/test_dmc_protocol.py -q
 ```
 
-Inspect the six target jobs, then run the complete experiment sequentially:
+Install a CUDA build of PyTorch and the project with DMC support:
 
 ```bash
+python -m pip install --upgrade pip
+python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+python -m pip install -e ".[dmc,test]"
+```
+
+Use EGL for headless MuJoCo rendering and verify the environment:
+
+```bash
+export MUJOCO_GL=egl
+python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')"
+python -c "from dm_control import suite; env=suite.load('humanoid', 'walk'); print(env.reset())"
+```
+
+The training script intentionally refuses to start without a CUDA device.
+
+## Reproduce the DMC pilot
+
+Keep all commands in the repository root and keep the same `MUJOCO_GL` value in every shell.
+
+### 1. Inspect the job matrix without training
+
+```bash
+conda activate etl-dmc
+export MUJOCO_GL=egl
 bash scripts/run_dmc_transfer_pilot.sh dry-run
-DMC_OUTPUT_ROOT=/root/autodl-tmp/dmc_transfer_pilot bash scripts/run_dmc_transfer_pilot.sh run
 ```
 
-The same `run` command skips completed source/target jobs and resumes incomplete
-target SAC jobs from policy, replay-buffer, action-model, and VecNormalize
-checkpoints. To rebuild only the comparison table and JSON summary:
+The output should list two shared source stages and six target jobs: three methods for Dog and three for Humanoid.
+
+### 2. Start the complete sequential run
+
+Choose a persistent output directory with sufficient free space:
 
 ```bash
-DMC_OUTPUT_ROOT=/root/autodl-tmp/dmc_transfer_pilot bash scripts/run_dmc_transfer_pilot.sh aggregate
+export DMC_OUTPUT_ROOT=/root/autodl-tmp/dmc_transfer_pilot
+bash scripts/run_dmc_transfer_pilot.sh run
 ```
 
-Final results are written to
-`$DMC_OUTPUT_ROOT/aggregate/results.csv` and `summary.json`. Training curves use
-return AUC over the full charged budget; ETL curves include their 200k source
-cost. This pilot does not reproduce the papers' 10M-step, multi-seed protocol.
+The script runs one job at a time. Re-running the same command skips completed stages and resumes incomplete target SAC jobs from the latest policy, replay buffer, action model, and observation-normalization checkpoint. An interrupted source stage is not checkpoint-resumable; avoid stopping during either initial source stage.
+
+### 3. Run stages manually when needed
+
+The source and target indices are printed by `dry-run`:
+
+```bash
+bash scripts/run_dmc_transfer_pilot.sh source 0
+bash scripts/run_dmc_transfer_pilot.sh target 0
+```
+
+Manual stage commands use the same `DMC_OUTPUT_ROOT`. A target ETL job requires its corresponding source bundle to be complete.
+
+### 4. Rebuild the comparison summary
+
+```bash
+bash scripts/run_dmc_transfer_pilot.sh aggregate
+```
+
+Aggregation requires every method's final evaluation and full checkpoint curve.
+
+## Outputs
+
+The main output tree is:
+
+```text
+$DMC_OUTPUT_ROOT/
+|-- sources/
+|   |-- dog-source-seed0/
+|   `-- humanoid-source-seed0/
+|-- jobs/
+|   |-- dog-etl_sar-seed0/
+|   |-- dog-etl_no_sar-seed0/
+|   |-- dog-lattice-seed0/
+|   |-- humanoid-etl_sar-seed0/
+|   |-- humanoid-etl_no_sar-seed0/
+|   `-- humanoid-lattice-seed0/
+`-- aggregate/
+    |-- results.csv
+    `-- summary.json
+```
+
+Each target job contains resumable `latest_*` artifacts, periodic checkpoints, TensorBoard logs, per-episode evaluation CSV files, and evaluation summaries.
+
+The aggregate CSV reports:
+
+- `return_auc`: trapezoidal area under the checkpoint mean-return curve divided by the total charged interaction budget. ETL curves include the 200,000-transition source cost as a zero-return prefix;
+- `final_mean_return`: mean undiscounted episode return over the fixed 50-episode final evaluation.
+
+Higher is better for both metrics. Because DMC return scales differ between Dog and Humanoid, compare methods within a domain rather than comparing raw values across domains.
+
+## Reference single-seed result
+
+The following values came from one completed server run of the checked-in pilot configuration. They are provided only as a pipeline reference, not as a paper-level benchmark claim.
+
+| Domain | Method | Return AUC | Final mean return |
+| --- | --- | ---: | ---: |
+| Dog | `etl_no_sar` | 3.3235 | 5.4493 |
+| Dog | `etl_sar` | 9.2942 | 12.6263 |
+| Dog | `lattice` | 89.9359 | 10.5048 |
+| Humanoid | `etl_no_sar` | 0.8764 | 0.9052 |
+| Humanoid | `etl_sar` | 0.8940 | 1.0921 |
+| Humanoid | `lattice` | 121.2435 | 169.8061 |
+
+In this run, enabling SAR improved ETL-noSAR on both reported metrics in both domains. ETL+SAR did not outperform Lattice overall: it achieved a higher final Dog return, while Lattice had much higher return AUC on both domains and much higher final Humanoid return.
+
+## Tests
+
+The fast suite excludes tests that require local MyoSuite assets:
+
+```bash
+python -m pytest -m "not myo" -q
+```
+
+The focused DMC checks are:
+
+```bash
+python -m pytest tests/test_dmc_config.py tests/test_dmc_env.py tests/test_dmc_protocol.py tests/test_lattice_policies.py -q
+```
+
+The repository also contains MyoSuite Hand/Leg pilot and formal multi-seed infrastructure. Install `.[myosuite,test]`, then use the scripts and configs under `scripts/` and `configs/`. Those protocols are retained for research extension but are not the primary reproduction path documented here.
+
+## Repository layout
+
+```text
+configs/                 Experiment configurations
+scripts/                 DMC, MyoSuite, server, and aggregation entry points
+src/etl_sar/             ETL, SAR, DMC, Lattice, and evaluation implementation
+tests/                   Unit, protocol, resume, and optional environment tests
+third_party/lattice/     Pinned official Lattice source snapshot and MIT license
+docs/superpowers/        Design specifications and implementation plans
+```
+
+## Scope and limitations
+
+- The DMC pilot uses only one training seed, so it provides no confidence interval or statistical-significance test.
+- Its 1M-transition budget is a reduced pilot, not a reproduction of the papers' longer multi-seed experiments.
+- ETL and SAR are reimplemented from their paper logic in a Stable-Baselines3 training stack; this repository does not include or wrap the original ETL Ray code.
+- The Lattice equations are pinned and parity-tested against the official repository, but the DMC environment/protocol is this repository's matched adaptation.
+- Hyperparameter conclusions from this pilot should not be generalized to all environments.
+
+## Lattice provenance and licenses
+
+Lattice is from [amathislab/lattice](https://github.com/amathislab/lattice) and accompanies the paper [*Latent Exploration for Reinforcement Learning*](https://arxiv.org/abs/2305.20065). The vendored snapshot is pinned to commit `846d02fa993b9b80ce5ecb806463e0a05711bad3`; its MIT license is preserved in [`third_party/lattice/LICENSE`](third_party/lattice/LICENSE).
+
+The repository-level license is available in [`LICENSE`](LICENSE).
