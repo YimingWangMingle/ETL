@@ -143,6 +143,12 @@ class LatticeActor(Actor):
                     last_layer_dim, log_std_init, state_dependent=True
                 )
 
+    def get_std(self) -> torch.Tensor:
+        std = super().get_std()
+        if isinstance(std, tuple):
+            return torch.cat(std, dim=-1)
+        return std
+
     def _get_constructor_parameters(self) -> dict[str, Any]:
         data = super()._get_constructor_parameters()
         data.update(

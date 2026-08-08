@@ -95,3 +95,27 @@ def test_sac_constructs_with_lattice_distribution() -> None:
     assert model.policy.actor.action_dist.__class__.__name__ == "SquashedLatticeNoiseDistribution"
     action, _ = model.predict(np.zeros(5, dtype=np.float32), deterministic=True)
     assert action.shape == (3,)
+
+
+def test_sac_lattice_sde_std_is_compatible_with_sb3_logging() -> None:
+    model = SAC(
+        LatticeSACPolicy,
+        env=ContinuousEnv(),
+        buffer_size=32,
+        learning_starts=1,
+        batch_size=2,
+        train_freq=(1, "step"),
+        gradient_steps=1,
+        use_sde=True,
+        sde_sample_freq=1,
+        policy_kwargs={"use_lattice": True, "use_expln": True},
+        verbose=0,
+        seed=1,
+        device="cpu",
+    )
+
+    model.learn(total_timesteps=8, log_interval=1)
+
+    std = model.actor.get_std()
+    assert isinstance(std, torch.Tensor)
+    assert torch.isfinite(std).all()
