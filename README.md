@@ -1,38 +1,9 @@
-# ETL-SAR: Source-to-Target Action Representation Transfer
+# ETL
 
 This repository is an ETL-dominant reinforcement-learning research prototype. It combines:
 
 - **ETL** for directional source-task exploration, behavior-aware representation learning, a GMVAE action representation, latent-action control, and supervised decoder fine-tuning;
-- **SAR-style transfer** for extracting a low-rank PCA/ICA action-synergy basis from high-return source trajectories and applying it as a bounded residual on the target task; and
-- **Lattice** as a matched exploration baseline implemented from the official Lattice covariance equations and adapted to Stable-Baselines3 2.x.
 
-The main reproducible experiment is a single-seed DeepMind Control Suite (DMC) walk-to-run pilot on Dog and Humanoid. This is an independent extension, not an official joint release from the ETL, SAR, or Lattice authors.
-
-## Method overview
-
-The source-to-target pipeline is:
-
-1. Train an ETL directional explorer on the easier `walk` source task.
-2. Store complete source episodes and train a GMVAE on their actions.
-3. Select actions from the highest-return 25% of source episodes.
-4. Fit a PCA-to-FastICA synergy basis on those selected actions.
-5. Train SAC on the harder `run` target task in the learned ETL latent action space.
-6. For ETL+SAR, add a learned residual in the frozen synergy subspace. Its L2 norm is hard-capped at 20% of the ETL decoder output norm.
-7. After the initial target phase, fine-tune the ETL decoder with an independent supervised update over observed latent/action pairs.
-
-ETL+SAR and ETL-noSAR load the same serialized source bundle. Their target runs differ only in whether the SAR residual scale is `1.0` or `0.0`.
-
-### Compared methods
-
-| Method | Source stage | Target action space | Exploration | SAR residual |
-| --- | --- | --- | --- | --- |
-| `etl_sar` | ETL source exploration + GMVAE + PCA/ICA | 4-D ETL latent action | SAC with gSDE | Enabled, capped at 20% |
-| `etl_no_sar` | Same source bundle as `etl_sar` | 4-D ETL latent action | SAC with gSDE | Disabled |
-| `lattice` | None | Native environment action | SAC with Lattice state-dependent covariance | Not applicable |
-
-All three target methods use the same SAC optimizer settings, two-layer 256-unit policy/value networks, observation normalization, evaluation seeds, action repeat, and total charged interaction budget. The Lattice run uses its native action space because that is part of the method, whereas ETL methods use their learned latent action space.
-
-The DMC Lattice baseline is a controlled adaptation, not a reproduction of an experiment from the Lattice paper: the official distribution equations and policy mechanism are retained, while the environment and shared SAC training protocol are supplied by this repository. See [`third_party/lattice/UPSTREAM.md`](third_party/lattice/UPSTREAM.md) for the pinned upstream commit, file hashes, license, and compatibility boundary.
 
 ## DMC experiment protocol
 
@@ -214,16 +185,6 @@ third_party/lattice/     Pinned official Lattice source snapshot and MIT license
 docs/superpowers/        Design specifications and implementation plans
 ```
 
-## Scope and limitations
-
-- The DMC pilot uses only one training seed, so it provides no confidence interval or statistical-significance test.
-- Its 1M-transition budget is a reduced pilot, not a reproduction of the papers' longer multi-seed experiments.
-- ETL and SAR are reimplemented from their paper logic in a Stable-Baselines3 training stack; this repository does not include or wrap the original ETL Ray code.
-- The Lattice equations are pinned and parity-tested against the official repository, but the DMC environment/protocol is this repository's matched adaptation.
-- Hyperparameter conclusions from this pilot should not be generalized to all environments.
-
-## Lattice provenance and licenses
-
-Lattice is from [amathislab/lattice](https://github.com/amathislab/lattice) and accompanies the paper [*Latent Exploration for Reinforcement Learning*](https://arxiv.org/abs/2305.20065). The vendored snapshot is pinned to commit `846d02fa993b9b80ce5ecb806463e0a05711bad3`; its MIT license is preserved in [`third_party/lattice/LICENSE`](third_party/lattice/LICENSE).
+## Licenses
 
 The repository-level license is available in [`LICENSE`](LICENSE).
