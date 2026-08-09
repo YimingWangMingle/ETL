@@ -5,17 +5,6 @@ This repository is an ETL-dominant reinforcement-learning research prototype. It
 - **ETL** for directional source-task exploration, behavior-aware representation learning, a GMVAE action representation, latent-action control, and supervised decoder fine-tuning;
 
 
-## DMC experiment protocol
-
-Two source-to-target chains are evaluated with `seed=0`:
-
-| Domain | Source task | Target task | ETL source | ETL target | Lattice target | Charged total per method |
-| --- | --- | --- | ---: | ---: | ---: | ---: |
-| Dog | `walk` | `run` | 200,000 | 800,000 | 1,000,000 | 1,000,000 |
-| Humanoid | `walk` | `run` | 200,000 | 800,000 | 1,000,000 | 1,000,000 |
-
-ETL source interactions are charged separately to both ETL methods even though the two runs share one physical source bundle. Evaluation occurs every 100,000 charged transitions using 10 fixed episodes, followed by a 50-episode final evaluation. Across the six method/domain jobs, the comparison declares 6,000,000 charged interactions; the two shared source stages are physically executed once each.
-
 ## Requirements
 
 The tested server profile is:
