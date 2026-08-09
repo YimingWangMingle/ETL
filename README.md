@@ -132,21 +132,6 @@ The aggregate CSV reports:
 
 Higher is better for both metrics. Because DMC return scales differ between Dog and Humanoid, compare methods within a domain rather than comparing raw values across domains.
 
-## Reference single-seed result
-
-The following values came from one completed server run of the checked-in pilot configuration. They are provided only as a pipeline reference, not as a paper-level benchmark claim.
-
-| Domain | Method | Return AUC | Final mean return |
-| --- | --- | ---: | ---: |
-| Dog | `etl_no_sar` | 3.3235 | 5.4493 |
-| Dog | `etl_sar` | 9.2942 | 12.6263 |
-| Dog | `lattice` | 89.9359 | 10.5048 |
-| Humanoid | `etl_no_sar` | 0.8764 | 0.9052 |
-| Humanoid | `etl_sar` | 0.8940 | 1.0921 |
-| Humanoid | `lattice` | 121.2435 | 169.8061 |
-
-In this run, enabling SAR improved ETL-noSAR on both reported metrics in both domains. ETL+SAR did not outperform Lattice overall: it achieved a higher final Dog return, while Lattice had much higher return AUC on both domains and much higher final Humanoid return.
-
 ## Tests
 
 The fast suite excludes tests that require local MyoSuite assets:
